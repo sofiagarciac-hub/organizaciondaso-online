@@ -16,6 +16,7 @@ const state = {
   pendingInvite: null,
   search: '',
   editingTaskId: null,
+  agentMessages: [],
 };
 
 function uid(prefix = 'id') {
@@ -319,6 +320,27 @@ const api = {
     if (!p || !me) return;
     copyText(weeklyText(p, me));
   },
+  askSofia(text) {
+    const p = currentProject();
+    const me = currentUser();
+    const query = (text || '').trim();
+    if (!p || !me || !query) return;
+    state.agentMessages.push({ from: 'me', text: query });
+    const result = sofiaAgentReply(p, me, query);
+    state.agentMessages.push({ from: 'sofia', text: result.text });
+    state.agentMessages = state.agentMessages.slice(-8);
+    if (result.openModal) setModal(result.openModal);
+    else render();
+  },
+  openTaskCreator() { setModal('task'); },
+  openMeetingCreator() { setModal('meeting'); },
+  requestNotifications() {
+    if (!('Notification' in window)) return showNotice('Tu navegador no soporta notificaciones.');
+    Notification.requestPermission().then(permission => {
+      showNotice(permission === 'granted' ? 'Notificaciones activadas.' : 'No se activaron las notificaciones.');
+      runReminderCheck(true);
+    });
+  },
   deleteProject(id) {
     const p = state.db.projects[id];
     if (!p) return;
@@ -457,6 +479,15 @@ function copyText(text) {
     input.remove();
     showNotice('Copiado al portapapeles.');
   }
+}
+
+function fileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 
@@ -633,6 +664,106 @@ Avance: ${s.done}/${s.total} tareas completadas. En proceso: ${s.doing}. Pendien
 Mi avance: ${s.personalPercent}%.
 Sugerencias de Sofia:
 ${ideas || '- Crear tareas, responsables y fechas para medir avance.'}`;
+}
+
+function nextPendingTasks(project, limit = 5) {
+  return [...(project.tasks || [])]
+    .filter(t => t.status !== 'done')
+    .sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'))
+    .slice(0, limit);
+}
+
+function upcomingMeetings(project, limit = 5) {
+  const today = todayISO();
+  return [...(project.meetings || [])]
+    .filter(m => !m.date || m.date >= today)
+    .sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'))
+    .slice(0, limit);
+}
+
+function sofiaAgentReply(project, me, query) {
+  const q = query.toLowerCase();
+  const tasks = project.tasks || [];
+  const meetings = project.meetings || [];
+  const pending = nextPendingTasks(project, 6);
+  const late = tasks.filter(isLate);
+
+  if (q.includes('crear') && q.includes('tarea')) {
+    return { text: 'Te abro el formulario de tarea. Pon titulo, responsable, fecha y prioridad para que aparezca en el tablero y en el reporte.', openModal: 'task' };
+  }
+  if (q.includes('agenda') || q.includes('agendar') || q.includes('reunion') || q.includes('reunión')) {
+    const upcoming = upcomingMeetings(project, 3);
+    const list = upcoming.length ? upcoming.map(m => `- ${m.title} (${fmtDate(m.date)})`).join('\n') : 'No hay reuniones futuras registradas.';
+    return { text: `Te abro el formulario para agendar una reunion.\n\nReuniones proximas:\n${list}`, openModal: 'meeting' };
+  }
+  if (q.includes('vence') || q.includes('vencen') || q.includes('fecha') || q.includes('pendiente')) {
+    const list = pending.length ? pending.map(t => `- ${t.title}: ${fmtDate(t.dueDate)} (${daysText(t.dueDate)}) - ${assigneeLabel(project, t)}`).join('\n') : 'No hay tareas pendientes.';
+    return { text: `Tareas pendientes por fecha:\n${list}` };
+  }
+  if (q.includes('tarea')) {
+    const done = tasks.filter(t => t.status === 'done').length;
+    const doing = tasks.filter(t => t.status === 'doing').length;
+    const todo = tasks.filter(t => t.status === 'todo').length;
+    const list = pending.length ? pending.slice(0, 4).map(t => `- ${t.title} (${statusPDFText(t.status)}, ${assigneeLabel(project, t)})`).join('\n') : 'No hay tareas abiertas.';
+    return { text: `Resumen de tareas: ${done} completadas, ${doing} en proceso, ${todo} por hacer y ${late.length} vencidas.\n\nProximas:\n${list}` };
+  }
+  if (q.includes('quien') || q.includes('equipo') || q.includes('avance') || q.includes('responsable')) {
+    const rows = (project.members || []).map(id => {
+      const profile = projectMemberProfile(project, id);
+      const progress = memberProgress(project, id);
+      return `- ${profile.name || 'Integrante'}: ${progress.percent}% (${progress.done}/${progress.total})`;
+    }).join('\n') || 'Aun no hay integrantes.';
+    return { text: `Avance del equipo:\n${rows}` };
+  }
+  if (q.includes('notifica') || q.includes('avis')) {
+    return { text: 'Puedes activar notificaciones con el boton "Activar avisos". Te avisare cuando una tarea o reunion este para hoy, manana o ya vencida.' };
+  }
+
+  const insight = sofiaInsights(project, me)[0];
+  return { text: insight ? `${insight.title}: ${insight.text}` : 'Puedo responder sobre tareas, vencimientos, reuniones, responsables, avance del equipo y ayudarte a agendar.' };
+}
+
+function reminderItems(project) {
+  const now = new Date();
+  const items = [];
+  (project.tasks || []).forEach(task => {
+    if (task.status === 'done' || !task.dueDate) return;
+    const due = new Date(task.dueDate + 'T23:59:59');
+    const days = Math.ceil((due - now) / 86400000);
+    if (days < -1 || days > 1) return;
+    items.push({
+      id: `task-${task.id}-${task.dueDate}`,
+      title: days < 0 ? 'Tarea vencida' : days === 0 ? 'Tarea para hoy' : 'Tarea para manana',
+      body: `${task.title} - ${assigneeLabel(project, task)}`,
+    });
+  });
+  (project.meetings || []).forEach(meeting => {
+    if (!meeting.date) return;
+    const date = new Date(meeting.date + 'T12:00:00');
+    const days = Math.ceil((date - now) / 86400000);
+    if (days < 0 || days > 1) return;
+    items.push({
+      id: `meeting-${meeting.id}-${meeting.date}`,
+      title: days === 0 ? 'Reunion para hoy' : 'Reunion para manana',
+      body: `${meeting.title} - ${fmtDate(meeting.date)}`,
+    });
+  });
+  return items;
+}
+
+function runReminderCheck(force = false) {
+  const project = currentProject();
+  if (!project) return;
+  const storageKey = `organizaciondaso_notified_${todayISO()}`;
+  const sent = new Set(JSON.parse(localStorage.getItem(storageKey) || '[]'));
+  const items = reminderItems(project).filter(item => force || !sent.has(item.id));
+  if (!items.length) return;
+  if ('Notification' in window && Notification.permission === 'granted') {
+    items.slice(0, 3).forEach(item => new Notification(item.title, { body: item.body }));
+  }
+  showNotice(items[0].title + ': ' + items[0].body);
+  items.forEach(item => sent.add(item.id));
+  localStorage.setItem(storageKey, JSON.stringify([...sent]));
 }
 
 function statusPDFText(status) {
@@ -815,8 +946,9 @@ function render() {
     bindStartFormsWithSync();
     return;
   }
-  appRoot.innerHTML = renderWorkspace(project, me) + renderModal(project, me);
+  appRoot.innerHTML = renderWorkspace(project, me) + renderAgentDock(project, me) + renderModal(project, me);
   bindWorkspaceFormsWithSync(project, me);
+  runReminderCheck();
 }
 
 function renderNotice() {
@@ -1238,6 +1370,31 @@ function renderSofia(project, me) {
     </section>`;
 }
 
+function renderAgentDock(project, me) {
+  const messages = state.agentMessages.length ? state.agentMessages : [
+    { from: 'sofia', text: 'Hola, soy Sofia. Preguntame por tareas, vencimientos, reuniones, avance del equipo o escribe "agendar reunion".' }
+  ];
+  return `
+    <aside class="agent-dock">
+      <div class="agent-head">
+        <div><strong>Sofia agente</strong><span>Lee tu proyecto y responde rapido</span></div>
+        <button onclick="app.requestNotifications()">Activar avisos</button>
+      </div>
+      <div class="agent-messages">
+        ${messages.map(m => `<div class="agent-msg ${m.from === 'me' ? 'me' : ''}">${escapeHTML(m.text)}</div>`).join('')}
+      </div>
+      <div class="agent-quick">
+        <button onclick="app.askSofia('que tareas hay pendientes')">Tareas</button>
+        <button onclick="app.askSofia('que vence pronto')">Vence pronto</button>
+        <button onclick="app.askSofia('agendar reunion')">Agendar</button>
+      </div>
+      <form id="sofiaAgentForm" class="agent-form">
+        <input name="query" placeholder="Escribe: que tareas hay, quien avanza, agendar reunion..." autocomplete="off">
+        <button type="submit">Enviar</button>
+      </form>
+    </aside>`;
+}
+
 function filteredTasks(project, me) {
   let tasks = project.tasks || [];
   if (state.ticketFilter === 'mine') tasks = tasks.filter(t => taskHasAssignee(t, me.id) && t.status !== 'done');
@@ -1499,7 +1656,9 @@ function renderModal(project, me) {
           <label>Email<input name="email" type="email" value="${escapeHTML(profile.email || me.email)}" required></label>
           <label>Rol<input name="role" value="${escapeHTML(profile.role || me.role || 'Integrante')}" required></label>
         </div>
-        <label>Foto por URL<input name="avatarUrl" value="${escapeHTML(profile.avatarUrl || '')}" placeholder="https://...jpg o png"></label>
+        <input type="hidden" name="avatarUrl" value="${escapeHTML(profile.avatarUrl || '')}">
+        <label>Subir foto desde tu compu<input name="avatarFile" type="file" accept="image/*"></label>
+        ${profile.avatarUrl ? `<div class="profile-preview">${avatarMarkup(profile, 'member-big-avatar')}<span>Foto actual guardada</span></div>` : `<p class="mini-note">Puedes subir una imagen JPG, PNG o WEBP. Se guarda dentro de tu perfil.</p>`}
         <label>Link personal<input name="profileUrl" value="${escapeHTML(profile.profileUrl || '')}" placeholder="Portafolio, Drive, LinkedIn, etc."></label>
         <label>Bio corta<textarea name="bio" placeholder="Ej. Encargada de investigación y reportes">${escapeHTML(profile.bio || '')}</textarea></label>
         <button class="primary full" type="submit">Guardar perfil</button>
@@ -1588,10 +1747,25 @@ function modalShell(title, body, subtitle = '') {
 }
 
 function bindWorkspaceForms(project, me) {
-  const profileForm = document.getElementById('profileForm');
-  if (profileForm) profileForm.addEventListener('submit', e => {
+  const agentForm = document.getElementById('sofiaAgentForm');
+  if (agentForm) agentForm.addEventListener('submit', e => {
     e.preventDefault();
-    app.saveProfile(Object.fromEntries(new FormData(profileForm)));
+    const data = Object.fromEntries(new FormData(agentForm));
+    agentForm.reset();
+    app.askSofia(data.query);
+  });
+  const profileForm = document.getElementById('profileForm');
+  if (profileForm) profileForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const formData = new FormData(profileForm);
+    const data = Object.fromEntries(formData);
+    const file = formData.get('avatarFile');
+    if (file && file.size) {
+      if (!file.type.startsWith('image/')) return showNotice('Sube una imagen valida.');
+      if (file.size > 900000) return showNotice('La foto pesa mucho. Usa una imagen menor a 900 KB.');
+      data.avatarUrl = await fileToDataURL(file);
+    }
+    app.saveProfile(data);
   });
   const editTaskForm = document.getElementById('editTaskForm');
   if (editTaskForm) editTaskForm.addEventListener('submit', e => {
@@ -1664,3 +1838,4 @@ function bindWorkspaceFormsWithSync(project, me) {
 }
 
 bootApp();
+setInterval(runReminderCheck, 5 * 60 * 1000);
