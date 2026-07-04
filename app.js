@@ -5,6 +5,7 @@ const appRoot = document.getElementById('app');
 
 const state = {
   db: loadDB(),
+  entryView: 'landing',
   authMode: 'login',
   startMode: 'create',
   mainTab: 'tickets',
@@ -250,6 +251,8 @@ function closeModal() {
 }
 
 const api = {
+  showLanding() { state.entryView = 'landing'; render(); },
+  showAuth(mode = 'login') { state.entryView = 'auth'; state.authMode = mode; render(); },
   setAuthMode(mode) { state.authMode = mode; render(); },
   setStartMode(mode) { state.startMode = mode; render(); },
   setTab(tab) { state.mainTab = tab; render(); },
@@ -615,8 +618,9 @@ bootstrapInvite();
 function render() {
   const me = currentUser();
   if (!me) {
-    appRoot.innerHTML = renderAuth();
-    bindAuthForms();
+    if (state.pendingInvite) state.entryView = 'auth';
+    appRoot.innerHTML = state.entryView === 'auth' ? renderAuth() : renderLanding();
+    if (state.entryView === 'auth') bindAuthForms();
     return;
   }
   if (state.pendingInvite) {
@@ -648,6 +652,95 @@ function renderBrand(extra = '') {
     </div>`;
 }
 
+function renderLanding() {
+  return `
+    <main class="landing">
+      ${renderNotice()}
+      <nav class="landing-nav">
+        ${renderBrand('landing-brand')}
+        <div class="landing-links">
+          <a href="#inicio">Inicio</a>
+          <a href="#gestion">Gestion</a>
+          <a href="#online">Online</a>
+        </div>
+        <button class="secondary" onclick="app.showAuth('login')">Ingresar</button>
+      </nav>
+
+      <section class="landing-page hero-page" id="inicio">
+        <div class="hero-bg" aria-hidden="true"></div>
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+          <span class="eyebrow">Workspace para equipos academicos y proyectos reales</span>
+          <h1>Organiza tareas, acuerdos y avances sin perder el control.</h1>
+          <p>Una plataforma online para crear proyectos, asignar responsables, controlar fechas, registrar reuniones y revisar el progreso de todo el equipo.</p>
+          <div class="hero-actions">
+            <button class="primary" onclick="app.showAuth('register')">Crear mi espacio</button>
+            <a class="hero-link" href="#gestion">Ver funciones</a>
+          </div>
+          <div class="hero-metrics">
+            <div><strong>3</strong><span>vistas clave</span></div>
+            <div><strong>24/7</strong><span>datos online</span></div>
+            <div><strong>PDF</strong><span>reportes listos</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="landing-page feature-page" id="gestion">
+        <div class="section-kicker">Gestion completa</div>
+        <div class="section-head">
+          <h2>Todo lo que un grupo necesita para avanzar ordenado.</h2>
+          <p>Organizaciondaso convierte el trabajo disperso en un flujo claro: tickets, miembros, acuerdos, reuniones y estadisticas en una sola interfaz.</p>
+        </div>
+        <div class="feature-showcase">
+          <article class="feature-panel main-feature">
+            <span>01</span>
+            <h3>Tablero de tickets</h3>
+            <p>Clasifica tareas por estado, prioridad, fecha limite y responsable. Ideal para saber que falta, quien lo hace y que ya se termino.</p>
+          </article>
+          <article class="feature-panel">
+            <span>02</span>
+            <h3>Equipo visible</h3>
+            <p>Perfiles, roles y carga de trabajo para que nadie quede fuera del seguimiento.</p>
+          </article>
+          <article class="feature-panel">
+            <span>03</span>
+            <h3>Acuerdos y reuniones</h3>
+            <p>Registra decisiones, responsables y actas para que el proyecto tenga memoria.</p>
+          </article>
+          <article class="feature-panel">
+            <span>04</span>
+            <h3>Reportes</h3>
+            <p>Exporta informacion del proyecto y revisa metricas de cumplimiento.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-page online-page" id="online">
+        <div class="online-copy">
+          <div class="section-kicker">Lista para publicar</div>
+          <h2>Base de datos online y despliegue preparado para Render.</h2>
+          <p>La aplicacion ya incluye servidor Node, API, SQLite y configuracion render.yaml. Solo falta subir el repositorio a GitHub y conectarlo como Web Service.</p>
+          <div class="deploy-steps">
+            <div><b>1</b><span>Subir a GitHub</span></div>
+            <div><b>2</b><span>Elegir Web Service en Render</span></div>
+            <div><b>3</b><span>Agregar disco persistente</span></div>
+          </div>
+          <button class="primary" onclick="app.showAuth('register')">Empezar ahora</button>
+        </div>
+        <div class="online-card">
+          <div class="status-line"><span class="sync-dot"></span> Online-ready</div>
+          <h3>Stack incluido</h3>
+          <ul>
+            <li>Frontend HTML/CSS/JS</li>
+            <li>Servidor Node + Express</li>
+            <li>Base SQLite persistente</li>
+            <li>Blueprint Render</li>
+          </ul>
+        </div>
+      </section>
+    </main>`;
+}
+
 function renderAuth() {
   const pending = state.pendingInvite?.project?.name;
   return `
@@ -665,6 +758,7 @@ function renderAuth() {
         </div>
       </section>
       <section class="auth-card">
+        <button class="ghost auth-back" onclick="app.showLanding()">Volver</button>
         <h2>${state.authMode === 'login' ? 'Iniciar sesion' : 'Crear cuenta'}</h2>
         <p>${pending ? `Tienes una invitacion pendiente a "${escapeHTML(pending)}". Ingresa para unirte.` : 'Accede a tus proyectos y manten el equipo sincronizado.'}</p>
         <div class="switch-row">
