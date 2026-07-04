@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: organizaciondaso-online
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+    disk:
+      name: organizaciondaso-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
