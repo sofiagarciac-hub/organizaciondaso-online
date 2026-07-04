@@ -258,6 +258,7 @@ const api = {
   setTab(tab) { state.mainTab = tab; render(); },
   setFilter(filter) { state.ticketFilter = filter; state.search = ''; render(); },
   openModal: setModal,
+  openProfileEditor() { setModal('profile'); },
   closeModal,
   logout() {
     state.db.currentUserId = '';
@@ -311,6 +312,12 @@ const api = {
     a.click();
     URL.revokeObjectURL(a.href);
     showNotice('Reporte PDF descargado.');
+  },
+  copyWeeklySummary() {
+    const p = currentProject();
+    const me = currentUser();
+    if (!p || !me) return;
+    copyText(weeklyText(p, me));
   },
   deleteProject(id) {
     const p = state.db.projects[id];
@@ -411,6 +418,29 @@ const api = {
     touchProject(p);
     saveDB();
     render();
+  },
+  saveProfile(data) {
+    const me = currentUser();
+    const p = currentProject();
+    if (!me || !p) return;
+    const clean = {
+      name: (data.name || me.name).trim(),
+      email: (data.email || me.email).trim(),
+      role: (data.role || me.role || 'Integrante').trim(),
+      avatarUrl: (data.avatarUrl || '').trim(),
+      profileUrl: (data.profileUrl || '').trim(),
+      bio: (data.bio || '').trim(),
+    };
+    state.db.users[me.id] = { ...me, ...clean };
+    Object.values(state.db.projects || {}).forEach(project => {
+      if (!project.members?.includes(me.id)) return;
+      project.memberProfiles = project.memberProfiles || {};
+      project.memberProfiles[me.id] = { ...(project.memberProfiles[me.id] || {}), ...clean };
+      touchProject(project);
+    });
+    saveDB();
+    closeModal();
+    showNotice('Perfil actualizado.');
   }
 };
 window.app = api;
@@ -468,6 +498,143 @@ function projectMemberName(project, id) {
   return project.memberProfiles?.[id]?.name || state.db.users[id]?.name || 'Integrante';
 }
 
+function projectMemberProfile(project, id) {
+  return {
+    ...(state.db.users[id] || {}),
+    ...(project.memberProfiles?.[id] || {}),
+  };
+}
+
+function avatarMarkup(profile = {}, className = 'tiny-avatar') {
+  const name = profile.name || 'Integrante';
+  if (profile.avatarUrl) {
+    return `<span class="${className} avatar-img"><img src="${escapeHTML(profile.avatarUrl)}" alt="${escapeHTML(name)}" onerror="this.parentElement.classList.remove('avatar-img');this.remove();"></span>`;
+  }
+  return `<span class="${className}">${escapeHTML(initials(name))}</span>`;
+}
+
+function weekRange(date = new Date()) {
+  const start = new Date(date);
+  const day = start.getDay() || 7;
+  start.setDate(start.getDate() - day + 1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
+function inCurrentWeek(value) {
+  if (!value) return false;
+  const { start, end } = weekRange();
+  const date = new Date(value.length === 10 ? value + 'T12:00:00' : value);
+  return date >= start && date <= end;
+}
+
+function weekLabel() {
+  const { start, end } = weekRange();
+  return `${fmtDate(start.toISOString().slice(0, 10))} - ${fmtDate(end.toISOString().slice(0, 10))}`;
+}
+
+function weeklySummary(project, me) {
+  const tasks = project.tasks || [];
+  const doneWeek = tasks.filter(t => t.status === 'done' && inCurrentWeek(t.completedAt || t.updatedAt || t.dueDate));
+  const createdWeek = tasks.filter(t => inCurrentWeek(t.createdAt || t.dueDate));
+  const dueWeek = tasks.filter(t => t.status !== 'done' && inCurrentWeek(t.dueDate));
+  const late = tasks.filter(isLate);
+  const score = memberProgress(project, me.id);
+  const members = (project.members || []).map(id => {
+    const profile = projectMemberProfile(project, id);
+    const progress = memberProgress(project, id);
+    return { id, name: profile.name || 'Integrante', progress };
+  }).sort((a, b) => b.progress.percent - a.progress.percent || b.progress.done - a.progress.done);
+  return {
+    range: weekLabel(),
+    total: tasks.length,
+    done: tasks.filter(t => t.status === 'done').length,
+    doing: tasks.filter(t => t.status === 'doing').length,
+    todo: tasks.filter(t => t.status === 'todo').length,
+    late: late.length,
+    dueWeek,
+    doneWeek,
+    createdWeek,
+    personalPercent: score.percent,
+    leader: members[0],
+  };
+}
+
+function sofiaInsights(project, me) {
+  const s = weeklySummary(project, me);
+  const tasks = project.tasks || [];
+  const highOpen = tasks.filter(t => t.status !== 'done' && t.priority === 'high');
+  const withoutAssignee = tasks.filter(t => !assigneeIds(t).length);
+  const doing = tasks.filter(t => t.status === 'doing');
+  const ideas = [];
+
+  if (!tasks.length) {
+    ideas.push({
+      title: 'Empieza con 3 tareas pequenas',
+      text: 'Crea una tarea de investigacion, una de entrega y una de revision. Asi el tablero ya muestra avance real esta semana.',
+      tone: 'blue',
+    });
+  }
+  if (s.late) {
+    ideas.push({
+      title: 'Hay tareas vencidas',
+      text: `Sofia recomienda revisar ${s.late} tarea(s) vencida(s), cambiar fecha o moverlas a completado si ya se hicieron.`,
+      tone: 'red',
+    });
+  }
+  if (highOpen.length) {
+    ideas.push({
+      title: 'Prioridad alta primero',
+      text: `Tienes ${highOpen.length} tarea(s) de prioridad alta abiertas. Conviene asignar responsable y resolverlas antes de agregar mas trabajo.`,
+      tone: 'orange',
+    });
+  }
+  if (doing.length > 4) {
+    ideas.push({
+      title: 'Demasiado en proceso',
+      text: 'El tablero tiene muchas tareas en proceso. Cierra o divide las mas grandes para que el avance se vea claro.',
+      tone: 'orange',
+    });
+  }
+  if (withoutAssignee.length) {
+    ideas.push({
+      title: 'Faltan responsables',
+      text: `${withoutAssignee.length} tarea(s) no tienen integrante asignado. Asignarlas ayuda a que el reporte semanal sea mas justo.`,
+      tone: 'blue',
+    });
+  }
+  if (!s.dueWeek.length && tasks.some(t => t.status !== 'done')) {
+    ideas.push({
+      title: 'Agenda la semana',
+      text: 'No hay entregas pendientes para esta semana. Pon fechas cercanas para que Sofia pueda priorizar mejor.',
+      tone: 'green',
+    });
+  }
+  if (s.doneWeek.length) {
+    ideas.push({
+      title: 'Buen cierre semanal',
+      text: `Esta semana ya se completaron ${s.doneWeek.length} tarea(s). Incluyelas en el PDF para mostrar evidencia de avance.`,
+      tone: 'green',
+    });
+  }
+
+  return ideas.slice(0, 5);
+}
+
+function weeklyText(project, me) {
+  const s = weeklySummary(project, me);
+  const ideas = sofiaInsights(project, me).map(i => `- ${i.title}: ${i.text}`).join('\n');
+  return `Reporte semanal ${project.name}
+Semana: ${s.range}
+Avance: ${s.done}/${s.total} tareas completadas. En proceso: ${s.doing}. Pendientes: ${s.todo}. Vencidas: ${s.late}.
+Mi avance: ${s.personalPercent}%.
+Sugerencias de Sofia:
+${ideas || '- Crear tareas, responsables y fechas para medir avance.'}`;
+}
+
 function statusPDFText(status) {
   if (status === 'done') return 'Completado';
   if (status === 'doing') return 'En proceso';
@@ -515,24 +682,37 @@ function buildReportPDF(project, me) {
   const pending = tasks.filter(t => t.status !== 'done');
   const late = tasks.filter(isLate);
   const doing = tasks.filter(t => t.status === 'doing');
+  const summary = weeklySummary(project, me);
+  const insights = sofiaInsights(project, me);
   const today = new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
 
-  addReportLine(pages, cursor, 'Organizaciondaso - Reporte del proyecto', { size: 18, bold: true, lineHeight: 24 });
+  addReportLine(pages, cursor, 'Organizaciondaso - Reporte semanal del proyecto', { size: 18, bold: true, lineHeight: 24 });
   addReportLine(pages, cursor, project.name, { size: 16, bold: true, lineHeight: 20 });
   addWrappedReport(pages, cursor, project.description || 'Sin descripcion del proyecto.', { maxChars: 96, lineHeight: 14 });
-  addReportLine(pages, cursor, `Generado por: ${me.name} | Fecha: ${today}`, { size: 10, lineHeight: 18 });
+  addReportLine(pages, cursor, `Semana: ${summary.range} | Generado por: ${me.name} | Fecha: ${today}`, { size: 10, lineHeight: 18 });
 
-  addReportSection(pages, cursor, 'Resumen');
+  addReportSection(pages, cursor, 'Resumen ejecutivo');
   addReportLine(pages, cursor, `Integrantes: ${(project.members || []).length}`);
   addReportLine(pages, cursor, `Tareas totales: ${tasks.length}`);
   addReportLine(pages, cursor, `Completadas: ${done.length} | En proceso: ${doing.length} | Pendientes: ${pending.length} | Vencidas: ${late.length}`);
+  addReportLine(pages, cursor, `Creadas esta semana: ${summary.createdWeek.length} | Cerradas esta semana: ${summary.doneWeek.length} | Vencen esta semana: ${summary.dueWeek.length}`);
   addReportLine(pages, cursor, `Acuerdos registrados: ${(project.agreements || []).length} | Reuniones registradas: ${(project.meetings || []).length}`);
+
+  addReportSection(pages, cursor, 'Sofia - sugerencias');
+  if (!insights.length) addReportLine(pages, cursor, 'Sin alertas fuertes. Mantener fechas y responsables actualizados.');
+  insights.forEach((item, index) => addWrappedReport(pages, cursor, `${index + 1}. ${item.title}: ${item.text}`, { maxChars: 100 }));
 
   addReportSection(pages, cursor, 'Equipo');
   (project.members || []).forEach((id, index) => {
-    const profile = project.memberProfiles?.[id] || state.db.users[id] || { name: 'Integrante', role: 'Sin rol' };
+    const profile = projectMemberProfile(project, id);
     const progress = memberProgress(project, id);
     addWrappedReport(pages, cursor, `${index + 1}. ${profile.name} - ${profile.role || 'Integrante'} - ${progress.done}/${progress.total} tareas completadas (${progress.percent}%).`, { maxChars: 100 });
+  });
+
+  addReportSection(pages, cursor, 'Vencen esta semana');
+  if (!summary.dueWeek.length) addReportLine(pages, cursor, 'No hay tareas pendientes con fecha dentro de esta semana.');
+  summary.dueWeek.forEach((task, index) => {
+    addWrappedReport(pages, cursor, `${index + 1}. ${task.title} | ${statusPDFText(task.status)} | ${assigneeLabel(project, task)} | Vence: ${fmtDate(task.dueDate)} | Prioridad: ${priorityPDFText(task.priority)}`, { maxChars: 100 });
   });
 
   addReportSection(pages, cursor, 'Tareas completadas');
@@ -919,6 +1099,7 @@ function bindStartForms() {
 }
 
 function renderWorkspace(project, me) {
+  const myProfile = projectMemberProfile(project, me.id);
   return `
     <div class="app-shell">
       ${renderNotice()}
@@ -929,6 +1110,7 @@ function renderWorkspace(project, me) {
           <nav class="main-tabs">
             ${tabBtn('tickets', 'Tickets')}
             ${tabBtn('team', 'Equipo')}
+            ${tabBtn('sofia', 'Sofía')}
             ${tabBtn('stats', 'Estadísticas')}
             ${tabBtn('org', 'Organización')}
           </nav>
@@ -945,9 +1127,12 @@ function renderWorkspace(project, me) {
       <div class="workspace-grid">
         <aside class="sidebar">
           <div class="profile-box">
-            <div class="profile-avatar">${escapeHTML(initials(me.name))}<span class="profile-edit">✎</span></div>
-            <h2>${escapeHTML(me.name)}</h2>
-            <p>${escapeHTML(project.memberProfiles[me.id]?.role || me.role || 'Integrante')}</p>
+            <button class="profile-avatar-btn" onclick="app.openProfileEditor()" title="Editar perfil">
+              ${avatarMarkup(myProfile, 'profile-avatar')}
+              <span class="profile-edit">Editar</span>
+            </button>
+            <h2>${escapeHTML(myProfile.name || me.name)}</h2>
+            <p>${escapeHTML(myProfile.role || me.role || 'Integrante')}</p>
             ${(() => { const s = taskStats(project,me); const pct = s.total ? Math.round(s.done/s.total*100) : 0; return `<div class="project-progress"><div class="project-progress-bar"><span style="width:${pct}%"></span></div><small>${pct}%</small></div>`; })()}
           </div>
           <nav class="side-nav">
@@ -959,6 +1144,7 @@ function renderWorkspace(project, me) {
           <div class="sidebar-tools">
             <div class="sync-info"><span class="sync-dot off" id="syncDot"></span><span id="syncLabel">Solo local</span></div>
             <button onclick="app.backToProjects()">← Cambiar proyecto</button>
+            <button onclick="app.openProfileEditor()">Editar perfil</button>
             <button onclick="app.copyInvite()">🔗 Copiar enlace unión</button>
             <button onclick="app.exportReportPDF()">📄 Descargar reporte PDF</button>
             <button onclick="app.openModal('projectInfo')">ⓘ Datos del proyecto</button>
@@ -984,6 +1170,7 @@ function sideBtnBadge(filter, icon, label, count) {
 
 function renderCurrentTab(project, me) {
   if (state.mainTab === 'team') return renderTeam(project, me);
+  if (state.mainTab === 'sofia') return renderSofia(project, me);
   if (state.mainTab === 'stats') return renderStats(project, me);
   if (state.mainTab === 'org') return renderOrganization(project, me);
   return renderTickets(project, me);
@@ -998,6 +1185,57 @@ function taskStats(project, me) {
     done: tasks.filter(t => t.status === 'done').length,
     late: tasks.filter(isLate).length,
   };
+}
+
+function renderSofia(project, me) {
+  const summary = weeklySummary(project, me);
+  const insights = sofiaInsights(project, me);
+  const pct = summary.total ? Math.round(summary.done / summary.total * 100) : 0;
+  const nextTasks = [...(project.tasks || [])]
+    .filter(t => t.status !== 'done')
+    .sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'))
+    .slice(0, 4);
+  return `
+    <div class="content-head">
+      <div class="content-title"><h1>Sofía</h1><p>IA gratis interna: revisa avance, fechas, responsables y prepara el enfoque semanal.</p></div>
+      <div class="action-row"><button class="secondary" onclick="app.copyWeeklySummary()">Copiar resumen</button><button class="primary" onclick="app.exportReportPDF()">Descargar PDF semanal</button></div>
+    </div>
+    <section class="sofia-hero">
+      <div>
+        <span class="section-kicker">Semana ${escapeHTML(summary.range)}</span>
+        <h2>${pct}% de avance general</h2>
+        <p>${summary.done} de ${summary.total} tareas completadas. ${summary.late ? `Hay ${summary.late} vencida(s), conviene revisarlas hoy.` : 'Sin vencidas fuertes por ahora.'}</p>
+      </div>
+      <div class="sofia-meter">
+        <strong>${summary.personalPercent}%</strong>
+        <span>tu avance</span>
+        <div class="mini-bar"><span style="width:${summary.personalPercent}%"></span></div>
+      </div>
+    </section>
+    <section class="sofia-grid">
+      <article class="weekly-card">
+        <h3>Plan semanal</h3>
+        <div class="weekly-stats">
+          <div><strong>${summary.createdWeek.length}</strong><span>creadas</span></div>
+          <div><strong>${summary.doneWeek.length}</strong><span>cerradas</span></div>
+          <div><strong>${summary.dueWeek.length}</strong><span>vencen</span></div>
+        </div>
+        <p>${summary.leader ? `${escapeHTML(summary.leader.name)} lidera con ${summary.leader.progress.percent}% de cumplimiento.` : 'Agrega integrantes y tareas para ver ranking.'}</p>
+      </article>
+      <article class="weekly-card">
+        <h3>Próximas tareas</h3>
+        ${nextTasks.length ? nextTasks.map(t => `<div class="sofia-task"><b>${escapeHTML(t.title)}</b><span>${escapeHTML(assigneeLabel(project, t))} · ${escapeHTML(daysText(t.dueDate))}</span></div>`).join('') : `<div class="empty-col">No hay tareas pendientes</div>`}
+      </article>
+    </section>
+    <section class="suggestion-grid">
+      ${insights.length ? insights.map(item => `
+        <article class="suggestion-card ${item.tone}">
+          <span>Sugerencia de Sofía</span>
+          <h3>${escapeHTML(item.title)}</h3>
+          <p>${escapeHTML(item.text)}</p>
+        </article>`).join('') : `
+        <article class="suggestion-card green"><span>Sugerencia de Sofía</span><h3>Todo tranquilo</h3><p>Mantén tareas con responsable y fecha para que el reporte semanal siga claro.</p></article>`}
+    </section>`;
 }
 
 function filteredTasks(project, me) {
@@ -1109,25 +1347,28 @@ function memberProgress(project, id) {
 }
 
 function renderMemberCard(project, id, me) {
-  const profile = project.memberProfiles?.[id] || state.db.users[id] || { name: 'Integrante', role: 'Sin rol' };
+  const profile = projectMemberProfile(project, id);
   const score = memberProgress(project, id);
   return `
     <article class="member-card ${id === me.id ? 'me' : ''}">
-      <div class="member-big-avatar">${escapeHTML(initials(profile.name))}</div>
+      ${avatarMarkup(profile, 'member-big-avatar')}
       <h3>${escapeHTML(profile.name)}</h3>
       <span class="role-pill">${escapeHTML(profile.role || 'Integrante')}</span>
+      ${profile.bio ? `<p class="member-bio">${escapeHTML(profile.bio)}</p>` : ''}
+      ${profile.profileUrl ? `<a class="member-link" href="${escapeHTML(profile.profileUrl)}" target="_blank" rel="noreferrer">Ver perfil</a>` : ''}
       <div class="member-score">
         <div class="score-row"><span>CUMPLIMIENTO</span><strong>${score.percent}%</strong></div>
         <div class="mini-bar"><span style="width:${score.percent}%"></span></div>
         <small>${score.done} completadas de ${score.total} recibidas</small>
       </div>
       <button class="primary assign-btn" onclick="app.openModal('task',{assignedTo:'${id}'})">＋ Asignar tarea</button>
+      ${id === me.id ? `<button class="ghost assign-btn" onclick="app.openProfileEditor()">Editar mi perfil</button>` : ''}
     </article>`;
 }
 
 function renderStats(project, me) {
   const members = (project.members || []).map(id => {
-    const profile = project.memberProfiles?.[id] || state.db.users[id] || { name: 'Integrante', role: 'Sin rol' };
+    const profile = projectMemberProfile(project, id);
     const score = memberProgress(project, id);
     const late = (project.tasks || []).filter(t => taskHasAssignee(t, id) && isLate(t)).length;
     return { id, profile, points: score.done - late, done: score.done, late };
@@ -1165,11 +1406,11 @@ function renderStats(project, me) {
 }
 
 function renderPodium(m, cls) {
-  return `<div class="podium-card ${cls}"><div class="podium-rank">${cls ? '👑' : '🏅'}</div><div class="podium-avatar">${escapeHTML(initials(m.profile.name))}</div><div class="podium-name">${escapeHTML(m.profile.name.split(' ')[0])}</div><div class="podium-points">${m.points} pts</div></div>`;
+  return `<div class="podium-card ${cls}"><div class="podium-rank">${cls ? '👑' : '🏅'}</div>${avatarMarkup(m.profile, 'podium-avatar')}<div class="podium-name">${escapeHTML(m.profile.name.split(' ')[0])}</div><div class="podium-points">${m.points} pts</div></div>`;
 }
 
 function renderRank(m, index) {
-  return `<div class="rank-row"><div class="rank-number">#${index + 1}</div><span class="tiny-avatar">${escapeHTML(initials(m.profile.name))}</span><div class="rank-main"><strong>${escapeHTML(m.profile.name)}</strong><span>${escapeHTML(m.profile.role || 'Integrante')}</span></div><span class="rank-points">${m.points >= 0 ? '+' : ''}${m.points}</span></div>`;
+  return `<div class="rank-row"><div class="rank-number">#${index + 1}</div>${avatarMarkup(m.profile, 'tiny-avatar')}<div class="rank-main"><strong>${escapeHTML(m.profile.name)}</strong><span>${escapeHTML(m.profile.role || 'Integrante')}</span></div><span class="rank-points">${m.points >= 0 ? '+' : ''}${m.points}</span></div>`;
 }
 
 function renderDeadline(project, task) {
@@ -1241,14 +1482,29 @@ function assigneeLabel(project, task) {
 function renderAssigneeChoices(project, selectedIds = []) {
   const chosen = new Set(selectedIds.filter(Boolean));
   return `<div class="assignee-grid">${(project.members || []).map(id => {
-    const p = project.memberProfiles?.[id] || state.db.users[id] || { name: 'Integrante', role: '' };
-    return `<label class="assignee-option"><input type="checkbox" name="assignedTo" value="${id}" ${chosen.has(id) ? 'checked' : ''}><span class="tiny-avatar">${escapeHTML(initials(p.name))}</span><span><b>${escapeHTML(p.name)}</b><small>${escapeHTML(p.role || 'Integrante')}</small></span></label>`;
+    const p = projectMemberProfile(project, id);
+    return `<label class="assignee-option"><input type="checkbox" name="assignedTo" value="${id}" ${chosen.has(id) ? 'checked' : ''}>${avatarMarkup(p, 'tiny-avatar')}<span><b>${escapeHTML(p.name)}</b><small>${escapeHTML(p.role || 'Integrante')}</small></span></label>`;
   }).join('')}</div>`;
 }
 
 function renderModal(project, me) {
   if (!state.modal) return '';
   const { type, data } = state.modal;
+  if (type === 'profile') {
+    const profile = projectMemberProfile(project, me.id);
+    return modalShell('Editar perfil', `
+      <form id="profileForm" class="form">
+        <label>Nombre completo<input name="name" value="${escapeHTML(profile.name || me.name)}" required></label>
+        <div class="form-two">
+          <label>Email<input name="email" type="email" value="${escapeHTML(profile.email || me.email)}" required></label>
+          <label>Rol<input name="role" value="${escapeHTML(profile.role || me.role || 'Integrante')}" required></label>
+        </div>
+        <label>Foto por URL<input name="avatarUrl" value="${escapeHTML(profile.avatarUrl || '')}" placeholder="https://...jpg o png"></label>
+        <label>Link personal<input name="profileUrl" value="${escapeHTML(profile.profileUrl || '')}" placeholder="Portafolio, Drive, LinkedIn, etc."></label>
+        <label>Bio corta<textarea name="bio" placeholder="Ej. Encargada de investigación y reportes">${escapeHTML(profile.bio || '')}</textarea></label>
+        <button class="primary full" type="submit">Guardar perfil</button>
+      </form>`, 'Cambia tu foto, rol y datos visibles para el equipo');
+  }
   if (type === 'task') return modalShell('Crear Ticket', `
     <form id="taskForm" class="form compact-form">
       <label>Título<input name="title" placeholder="Ej. Revisar marco teórico" required></label>
@@ -1332,6 +1588,11 @@ function modalShell(title, body, subtitle = '') {
 }
 
 function bindWorkspaceForms(project, me) {
+  const profileForm = document.getElementById('profileForm');
+  if (profileForm) profileForm.addEventListener('submit', e => {
+    e.preventDefault();
+    app.saveProfile(Object.fromEntries(new FormData(profileForm)));
+  });
   const editTaskForm = document.getElementById('editTaskForm');
   if (editTaskForm) editTaskForm.addEventListener('submit', e => {
     e.preventDefault();
