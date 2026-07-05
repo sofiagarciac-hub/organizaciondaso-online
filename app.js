@@ -1035,30 +1035,60 @@ function renderLanding() {
         <div class="hero-bg" aria-hidden="true"></div>
         <div class="hero-overlay"></div>
         <div class="hero-content">
-          <span class="eyebrow">Gestión de proyectos para equipos que entregan</span>
-          <h1>La forma más clara de dirigir proyectos en equipo.</h1>
-          <p>Organizaciondaso centraliza tareas, responsables, acuerdos, reuniones y reportes para que cada proyecto tenga avance visible, responsables definidos y memoria de decisiones.</p>
+          <span class="eyebrow">Suite online de coordinación y seguimiento</span>
+          <h1>Organizaciondaso Online</h1>
+          <p>Un workspace profesional para convertir tareas, responsables, reuniones y acuerdos en una operación visible, medible y fácil de presentar.</p>
           <div class="hero-actions">
             <button class="primary hero-cta" onclick="app.showAuth('register')">Empezar gratis</button>
             <button class="secondary hero-cta" onclick="app.showAuth('login')">Entrar al panel</button>
           </div>
-          <p class="hero-proof">Diseñado para equipos académicos, áreas internas y grupos que necesitan ordenar responsabilidades sin depender de chats sueltos.</p>
+          <div class="hero-bullets">
+            <span>Tablero Kanban</span>
+            <span>Reportes PDF</span>
+            <span>Base online</span>
+          </div>
         </div>
         <div class="hero-product" aria-label="Vista previa del panel">
           <div class="product-top">
             <span></span><span></span><span></span>
-            <strong>Proyecto activo</strong>
+            <strong>Panel ejecutivo</strong>
           </div>
-          <div class="product-grid">
-            <div class="product-stat"><span>Avance</span><strong>74%</strong></div>
-            <div class="product-stat"><span>Tareas</span><strong>18</strong></div>
-            <div class="product-stat danger-soft"><span>Vence hoy</span><strong>3</strong></div>
+          <div class="product-shell">
+            <aside class="product-nav">
+              <b>OD</b>
+              <span class="active"></span>
+              <span></span>
+              <span></span>
+            </aside>
+            <div class="product-main">
+              <div class="product-title">
+                <div><span>Proyecto</span><strong>Lanzamiento Q3</strong></div>
+                <em>Online</em>
+              </div>
+              <div class="product-grid">
+                <div class="product-stat"><span>Avance</span><strong>74%</strong></div>
+                <div class="product-stat"><span>Tareas</span><strong>18</strong></div>
+                <div class="product-stat danger-soft"><span>Riesgos</span><strong>3</strong></div>
+              </div>
+              <div class="product-board">
+                <div><b>Por hacer</b><span></span><span></span></div>
+                <div><b>En proceso</b><span></span><span></span><span></span></div>
+                <div><b>Completado</b><span></span><span></span></div>
+              </div>
+            </div>
           </div>
-          <div class="product-board">
-            <div><b>Por hacer</b><span></span><span></span></div>
-            <div><b>En proceso</b><span></span><span></span><span></span></div>
-            <div><b>Completado</b><span></span><span></span></div>
-          </div>
+        </div>
+      </section>
+
+      <section class="landing-page proof-page">
+        <div class="proof-copy">
+          <span class="section-kicker">Hecho para avanzar</span>
+          <h2>Todo el equipo ve lo mismo: prioridades, responsables y progreso.</h2>
+        </div>
+        <div class="proof-metrics">
+          <div><strong>1</strong><span>lugar para tareas y acuerdos</span></div>
+          <div><strong>0</strong><span>pendientes perdidos en chats</span></div>
+          <div><strong>PDF</strong><span>reportes listos para entregar</span></div>
         </div>
       </section>
 
