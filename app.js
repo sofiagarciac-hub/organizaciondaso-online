@@ -17,7 +17,11 @@ const state = {
   search: '',
   editingTaskId: null,
   agentMessages: [],
+  serverVersion: null,
+  sync: { status: 'offline', label: 'Solo local' },
 };
+
+let remoteSaveQueue = Promise.resolve();
 
 function uid(prefix = 'id') {
   return prefix + '_' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
@@ -82,7 +86,7 @@ function saveDB() {
   if (state.db.currentUserId) localStorage.setItem(SESSION_USER_KEY, state.db.currentUserId);
   else localStorage.removeItem(SESSION_USER_KEY);
   if (state.selectedProjectId) localStorage.setItem('hanter_selected_project_v5', state.selectedProjectId);
-  saveRemoteDB();
+  queueRemoteSave();
 }
 
 async function loadRemoteDB() {
@@ -95,29 +99,75 @@ async function loadRemoteDB() {
       projects: remote.projects || {},
       currentUserId: localStorage.getItem(SESSION_USER_KEY) || state.db.currentUserId || '',
     };
+    state.serverVersion = Number.isFinite(Number(remote.version)) ? Number(remote.version) : null;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.db));
-    setSyncStatus(true);
+    setSyncStatus('online', 'Online');
   } catch (err) {
-    setSyncStatus(false);
+    setSyncStatus('offline', 'Sin conexión');
   }
 }
 
-async function saveRemoteDB() {
+function queueRemoteSave() {
+  setSyncStatus('saving', 'Guardando...');
+  remoteSaveQueue = remoteSaveQueue
+    .catch(() => {})
+    .then(() => saveRemoteDB());
+  return remoteSaveQueue;
+}
+
+async function saveRemoteDB(retryOnConflict = true) {
   try {
     const payload = {
       users: state.db.users || {},
       projects: state.db.projects || {},
+      version: state.serverVersion,
     };
     const response = await fetch(API_DB_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (response.status === 409) {
+      const conflict = await response.json();
+      if (retryOnConflict && mergeRemoteState(conflict.state)) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state.db));
+        return saveRemoteDB(false);
+      }
+      throw new Error('Conflicto de sincronización');
+    }
     if (!response.ok) throw new Error('No se pudo guardar');
-    setSyncStatus(true);
+    const saved = await response.json();
+    state.serverVersion = Number.isFinite(Number(saved.version)) ? Number(saved.version) : state.serverVersion;
+    setSyncStatus('online', 'Guardado');
   } catch (err) {
-    setSyncStatus(false);
+    setSyncStatus('offline', 'Sin conexión');
   }
+}
+
+function mergeRemoteState(remote) {
+  if (!remote || typeof remote !== 'object') return false;
+  const localCurrentUser = state.db.currentUserId;
+  const localUsers = state.db.users || {};
+  const localProjects = state.db.projects || {};
+  const mergedProjects = { ...(remote.projects || {}) };
+
+  Object.entries(localProjects).forEach(([id, localProject]) => {
+    const remoteProject = mergedProjects[id];
+    mergedProjects[id] = remoteProject ? mergeProject(remoteProject, localProject) : localProject;
+    mergedProjects[id].updatedAt = [remoteProject?.updatedAt, localProject?.updatedAt]
+      .filter(Boolean)
+      .sort()
+      .at(-1) || new Date().toISOString();
+  });
+
+  state.db = {
+    users: { ...(remote.users || {}), ...localUsers },
+    projects: mergedProjects,
+    currentUserId: localCurrentUser,
+  };
+  state.serverVersion = Number.isFinite(Number(remote.version)) ? Number(remote.version) : state.serverVersion;
+  setSyncStatus('saving', 'Fusionando cambios...');
+  return true;
 }
 
 async function bootApp() {
@@ -971,83 +1021,148 @@ function renderLanding() {
       <nav class="landing-nav">
         ${renderBrand('landing-brand')}
         <div class="landing-links">
-          <a href="#inicio">Inicio</a>
-          <a href="#gestion">Gestion</a>
-          <a href="#online">Online</a>
+          <a href="#plataforma">Plataforma</a>
+          <a href="#operacion">Operación</a>
+          <a href="#seguridad">Confianza</a>
         </div>
-        <button class="secondary" onclick="app.showAuth('login')">Ingresar</button>
+        <div class="landing-actions">
+          <button class="ghost" onclick="app.showAuth('login')">Ingresar</button>
+          <button class="primary" onclick="app.showAuth('register')">Crear workspace</button>
+        </div>
       </nav>
 
-      <section class="landing-page hero-page" id="inicio">
+      <section class="landing-page hero-page" id="plataforma">
         <div class="hero-bg" aria-hidden="true"></div>
         <div class="hero-overlay"></div>
         <div class="hero-content">
-          <span class="eyebrow">Workspace para equipos academicos y proyectos reales</span>
-          <h1>Organiza tareas, acuerdos y avances sin perder el control.</h1>
-          <p>Una plataforma online para crear proyectos, asignar responsables, controlar fechas, registrar reuniones y revisar el progreso de todo el equipo.</p>
+          <span class="eyebrow">Gestión de proyectos para equipos que entregan</span>
+          <h1>La forma más clara de dirigir proyectos en equipo.</h1>
+          <p>Organizaciondaso centraliza tareas, responsables, acuerdos, reuniones y reportes para que cada proyecto tenga avance visible, responsables definidos y memoria de decisiones.</p>
           <div class="hero-actions">
-            <button class="primary" onclick="app.showAuth('register')">Crear mi espacio</button>
-            <a class="hero-link" href="#gestion">Ver funciones</a>
+            <button class="primary hero-cta" onclick="app.showAuth('register')">Empezar gratis</button>
+            <button class="secondary hero-cta" onclick="app.showAuth('login')">Entrar al panel</button>
           </div>
-          <div class="hero-metrics">
-            <div><strong>3</strong><span>vistas clave</span></div>
-            <div><strong>24/7</strong><span>datos online</span></div>
-            <div><strong>PDF</strong><span>reportes listos</span></div>
+          <p class="hero-proof">Diseñado para equipos académicos, áreas internas y grupos que necesitan ordenar responsabilidades sin depender de chats sueltos.</p>
+        </div>
+        <div class="hero-product" aria-label="Vista previa del panel">
+          <div class="product-top">
+            <span></span><span></span><span></span>
+            <strong>Proyecto activo</strong>
+          </div>
+          <div class="product-grid">
+            <div class="product-stat"><span>Avance</span><strong>74%</strong></div>
+            <div class="product-stat"><span>Tareas</span><strong>18</strong></div>
+            <div class="product-stat danger-soft"><span>Vence hoy</span><strong>3</strong></div>
+          </div>
+          <div class="product-board">
+            <div><b>Por hacer</b><span></span><span></span></div>
+            <div><b>En proceso</b><span></span><span></span><span></span></div>
+            <div><b>Completado</b><span></span><span></span></div>
           </div>
         </div>
       </section>
 
-      <section class="landing-page feature-page" id="gestion">
-        <div class="section-kicker">Gestion completa</div>
+      <section class="landing-page feature-page" id="operacion">
+        <div class="section-kicker">Operación completa</div>
         <div class="section-head">
-          <h2>Todo lo que un grupo necesita para avanzar ordenado.</h2>
-          <p>Organizaciondaso convierte el trabajo disperso en un flujo claro: tickets, miembros, acuerdos, reuniones y estadisticas en una sola interfaz.</p>
+          <h2>Un sistema simple para coordinar, medir y cerrar pendientes.</h2>
+          <p>Organizaciondaso ayuda a pasar de conversaciones dispersas a un tablero accionable, con responsables visibles, fechas claras y reportes listos para revisar avances.</p>
         </div>
-        <div class="feature-showcase">
-          <article class="feature-panel main-feature">
-            <span>01</span>
-            <h3>Tablero de tickets</h3>
-            <p>Clasifica tareas por estado, prioridad, fecha limite y responsable. Ideal para saber que falta, quien lo hace y que ya se termino.</p>
+        <div class="company-strip">
+          <span>Planificación</span>
+          <span>Seguimiento</span>
+          <span>Responsables</span>
+          <span>Reportes PDF</span>
+        </div>
+        <div class="feature-showcase enterprise-grid">
+          <article class="feature-panel main-feature enterprise-feature">
+            <span>01 / CONTROL</span>
+            <h3>Tablero operativo</h3>
+            <p>Ordena el trabajo por estado, prioridad, fecha límite y responsable para saber qué debe pasar hoy y qué ya quedó cerrado.</p>
           </article>
           <article class="feature-panel">
-            <span>02</span>
-            <h3>Equipo visible</h3>
-            <p>Perfiles, roles y carga de trabajo para que nadie quede fuera del seguimiento.</p>
+            <span>02 / EQUIPO</span>
+            <h3>Responsabilidad visible</h3>
+            <p>Cada integrante tiene rol, perfil y carga de trabajo clara. Menos confusión, más acción.</p>
           </article>
           <article class="feature-panel">
-            <span>03</span>
+            <span>03 / MEMORIA</span>
             <h3>Acuerdos y reuniones</h3>
-            <p>Registra decisiones, responsables y actas para que el proyecto tenga memoria.</p>
+            <p>Guarda decisiones, actas y responsables para que el proyecto no dependa de chats perdidos.</p>
           </article>
           <article class="feature-panel">
-            <span>04</span>
-            <h3>Reportes</h3>
-            <p>Exporta informacion del proyecto y revisa metricas de cumplimiento.</p>
+            <span>04 / DIRECCIÓN</span>
+            <h3>Métricas y reportes</h3>
+            <p>Revisa avance, cumplimiento y fechas clave. Exporta reportes listos para compartir.</p>
+          </article>
+          <article class="feature-panel">
+            <span>05 / SOPORTE</span>
+            <h3>Sofia asistente</h3>
+            <p>Resume pendientes, detecta vencimientos y ayuda a preparar la siguiente acción del equipo.</p>
           </article>
         </div>
       </section>
 
-      <section class="landing-page online-page" id="online">
+      <section class="landing-page workflow-page">
+        <div class="section-head compact-head">
+          <h2>De pendiente suelto a entrega cerrada.</h2>
+          <p>El flujo está pensado para equipos que necesitan moverse rápido sin perder trazabilidad.</p>
+        </div>
+        <div class="workflow-grid">
+          <article class="workflow-card">
+            <b>01</b>
+            <h3>Captura el trabajo</h3>
+            <p>Crea tareas con prioridad, fecha limite, responsable y enlaces de apoyo.</p>
+          </article>
+          <article class="workflow-card">
+            <b>02</b>
+            <h3>Alinea al equipo</h3>
+            <p>Invita integrantes, define roles y mantiene visible quien tiene cada pendiente.</p>
+          </article>
+          <article class="workflow-card">
+            <b>03</b>
+            <h3>Registra decisiones</h3>
+            <p>Guarda acuerdos y reuniones para que el proyecto tenga memoria operativa.</p>
+          </article>
+          <article class="workflow-card">
+            <b>04</b>
+            <h3>Entrega con evidencia</h3>
+            <p>Revisa metricas, copia resumen semanal y descarga reportes PDF.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-page online-page" id="seguridad">
         <div class="online-copy">
-          <div class="section-kicker">Lista para publicar</div>
-          <h2>Base de datos online y despliegue preparado para Render.</h2>
-          <p>La aplicacion ya incluye servidor Node, API, SQLite y configuracion render.yaml. Solo falta subir el repositorio a GitHub y conectarlo como Web Service.</p>
+          <div class="section-kicker">Lista para operar online</div>
+          <h2>Base persistente, sincronización y despliegue preparado.</h2>
+          <p>La aplicación usa servidor Node, API propia y SQLite persistente. Está preparada para publicarse en Render y mantener la información del equipo disponible.</p>
           <div class="deploy-steps">
-            <div><b>1</b><span>Subir a GitHub</span></div>
-            <div><b>2</b><span>Elegir Web Service en Render</span></div>
-            <div><b>3</b><span>Agregar disco persistente</span></div>
+            <div><b>01</b><span>Datos guardados en servidor</span></div>
+            <div><b>02</b><span>Control de cambios para evitar sobrescrituras</span></div>
+            <div><b>03</b><span>Backups automáticos antes de persistir</span></div>
           </div>
-          <button class="primary" onclick="app.showAuth('register')">Empezar ahora</button>
+          <button class="primary" onclick="app.showAuth('register')">Crear cuenta</button>
         </div>
         <div class="online-card">
-          <div class="status-line"><span class="sync-dot"></span> Online-ready</div>
-          <h3>Stack incluido</h3>
+          <div class="status-line"><span class="sync-dot online"></span> Operación online</div>
+          <h3>Lo que recibe tu equipo</h3>
           <ul>
-            <li>Frontend HTML/CSS/JS</li>
-            <li>Servidor Node + Express</li>
-            <li>Base SQLite persistente</li>
-            <li>Blueprint Render</li>
+            <li><b>Panel único</b><span>Tareas, equipo, reuniones y estadísticas.</span></li>
+            <li><b>Invitaciones</b><span>Enlaces y códigos para sumar integrantes.</span></li>
+            <li><b>Continuidad</b><span>Datos persistentes y respaldo local exportable.</span></li>
+            <li><b>Entrega</b><span>Reportes PDF y resumen semanal.</span></li>
           </ul>
+        </div>
+      </section>
+
+      <section class="landing-page final-cta">
+        <span class="section-kicker">Empieza en minutos</span>
+        <h2>Menos coordinación manual. Más avance visible.</h2>
+        <p>Crea un workspace, invita al equipo y empieza a convertir pendientes dispersos en un plan de trabajo claro.</p>
+        <div class="hero-actions">
+          <button class="primary hero-cta" onclick="app.showAuth('register')">Crear workspace</button>
+          <button class="secondary hero-cta" onclick="app.showAuth('login')">Ya tengo cuenta</button>
         </div>
       </section>
     </main>`;
@@ -1274,7 +1389,7 @@ function renderWorkspace(project, me) {
             ${sideBtnBadge('done', '◎', 'Completadas', taskStats(project,me).done)}
           </nav>
           <div class="sidebar-tools">
-            <div class="sync-info"><span class="sync-dot off" id="syncDot"></span><span id="syncLabel">Solo local</span></div>
+            <div class="sync-info"><span class="${syncDotClass()}" id="syncDot"></span><span id="syncLabel">${escapeHTML(state.sync.label)}</span></div>
             <button onclick="app.backToProjects()">← Cambiar proyecto</button>
             <button onclick="app.openProfileEditor()">Editar perfil</button>
             <button onclick="app.copyInvite()">🔗 Copiar enlace unión</button>
@@ -1821,11 +1936,16 @@ function bindWorkspaceForms(project, me) {
   });
 }
 
-function setSyncStatus(online) {
+function syncDotClass() {
+  return 'sync-dot ' + (state.sync.status || 'offline');
+}
+
+function setSyncStatus(status, text) {
+  state.sync = { status, label: text };
   const dot = document.getElementById('syncDot');
-  const label = document.getElementById('syncLabel');
-  if (dot) dot.className = 'sync-dot' + (online ? '' : ' off');
-  if (label) label.textContent = online ? 'Online' : 'Sin conexión';
+  const syncLabel = document.getElementById('syncLabel');
+  if (dot) dot.className = syncDotClass();
+  if (syncLabel) syncLabel.textContent = state.sync.label;
 }
 
 function bindStartFormsWithSync() {
@@ -1834,7 +1954,7 @@ function bindStartFormsWithSync() {
 
 function bindWorkspaceFormsWithSync(project, me) {
   bindWorkspaceForms(project, me);
-  setSyncStatus(true);
+  setSyncStatus(state.sync.status, state.sync.label);
 }
 
 bootApp();
