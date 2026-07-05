@@ -8,7 +8,7 @@ const state = {
   entryView: 'landing',
   authMode: 'login',
   startMode: 'create',
-  mainTab: 'tickets',
+  mainTab: 'today',
   ticketFilter: 'mine',
   priorityFilter: 'all',
   dueFilter: 'all',
@@ -1104,7 +1104,7 @@ function render() {
     bindStartFormsWithSync();
     return;
   }
-  appRoot.innerHTML = renderWorkspace(project, me) + renderAgentDock(project, me) + renderModal(project, me);
+  appRoot.innerHTML = renderWorkspace(project, me) + renderModal(project, me);
   bindWorkspaceFormsWithSync(project, me);
   runReminderCheck();
 }
@@ -1493,23 +1493,20 @@ function renderWorkspace(project, me) {
           ${renderBrand()}
           <div class="brand-divider"></div>
           <nav class="main-tabs">
-            ${tabBtn('today', 'Hoy')}
-            ${tabBtn('tickets', 'Tickets')}
-            ${tabBtn('calendar', 'Calendario')}
+            ${tabBtn('today', 'Inicio')}
+            ${tabBtn('tickets', 'Tareas')}
             ${tabBtn('team', 'Equipo')}
-            ${tabBtn('sofia', 'Sofía')}
-            ${tabBtn('stats', 'Estadísticas')}
+            ${tabBtn('stats', 'Reportes')}
             ${tabBtn('org', 'Organización')}
           </nav>
         </div>
         <div class="top-actions">
-          <button class="icon-only" title="Copiar invitación" onclick="app.copyInvite()">🔗</button>
-          <button class="icon-only" title="Código largo" onclick="app.copyLongCode()">⌁</button>
-          <button class="icon-only" title="Exportar respaldo" onclick="app.exportProject()">⬇</button>
-          <button class="icon-only" title="Descargar reporte PDF" onclick="app.exportReportPDF()">📄</button>
-          <button class="icon-only" title="Cambiar tema" onclick="app.toggleTheme()">${state.theme === 'dark' ? '☀' : '◐'}</button>
+          <button class="top-action-btn" onclick="app.copyInvite()">Invitar</button>
+          <button class="top-action-btn" onclick="app.exportProject()">Respaldo</button>
+          <button class="top-action-btn primary-lite" onclick="app.exportReportPDF()">PDF</button>
+          <button class="top-action-btn" onclick="app.toggleTheme()">${state.theme === 'dark' ? 'Claro' : 'Oscuro'}</button>
           <span class="education-pill">${escapeHTML(project.name)}</span>
-          <button class="icon-only" title="Salir" onclick="app.logout()">↪</button>
+          <button class="top-action-btn" onclick="app.logout()">Salir</button>
         </div>
       </header>
       <div class="workspace-grid">
@@ -1558,9 +1555,7 @@ function sideBtnBadge(filter, icon, label, count) {
 
 function renderCurrentTab(project, me) {
   if (state.mainTab === 'today') return renderToday(project, me);
-  if (state.mainTab === 'calendar') return renderCalendar(project, me);
   if (state.mainTab === 'team') return renderTeam(project, me);
-  if (state.mainTab === 'sofia') return renderSofia(project, me);
   if (state.mainTab === 'stats') return renderStats(project, me);
   if (state.mainTab === 'org') return renderOrganization(project, me);
   return renderTickets(project, me);
@@ -1628,55 +1623,63 @@ function renderSofia(project, me) {
     </section>`;
 }
 
-function renderAgentDock(project, me) {
-  const messages = state.agentMessages.length ? state.agentMessages : [
-    { from: 'sofia', text: 'Hola, soy Sofia. Preguntame por tareas, vencimientos, reuniones, avance del equipo o escribe "agendar reunion".' }
-  ];
-  return `
-    <aside class="agent-dock">
-      <div class="agent-head">
-        <div><strong>Sofia agente</strong><span>Lee tu proyecto y responde rapido</span></div>
-        <button onclick="app.requestNotifications()">Activar avisos</button>
-      </div>
-      <div class="agent-messages">
-        ${messages.map(m => `<div class="agent-msg ${m.from === 'me' ? 'me' : ''}">${escapeHTML(m.text)}</div>`).join('')}
-      </div>
-      <div class="agent-quick">
-        <button onclick="app.askSofia('que tareas hay pendientes')">Tareas</button>
-        <button onclick="app.askSofia('que vence pronto')">Vence pronto</button>
-        <button onclick="app.askSofia('agendar reunion')">Agendar</button>
-      </div>
-      <form id="sofiaAgentForm" class="agent-form">
-        <input name="query" placeholder="Escribe: que tareas hay, quien avanza, agendar reunion..." autocomplete="off">
-        <button type="submit">Enviar</button>
-      </form>
-    </aside>`;
-}
-
 function renderToday(project, me) {
   const tasks = project.tasks || [];
   const late = tasks.filter(isLate).sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
   const today = tasks.filter(t => t.status !== 'done' && isTodayISO(t.dueDate));
   const mine = tasks.filter(t => taskHasAssignee(t, me.id) && t.status !== 'done').slice(0, 6);
   const high = tasks.filter(t => t.status !== 'done' && t.priority === 'high').slice(0, 6);
+  const stats = taskStats(project, me);
+  const completion = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+  const nextDeadlines = tasks
+    .filter(t => t.status !== 'done' && t.dueDate)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    .slice(0, 5);
   const meetings = [...(project.meetings || [])].filter(m => m.date && m.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4);
   return `
-    <div class="content-head">
-      <div class="content-title"><h1>Hoy</h1><p>Lo urgente, lo tuyo y las proximas reuniones del proyecto.</p></div>
-      <div class="action-row"><button class="primary" onclick="app.openModal('task')">+ Nueva tarea</button><button class="secondary" onclick="app.openModal('meeting')">+ Reunion</button></div>
-    </div>
-    <section class="today-grid">
-      ${renderFocusCard('Vencidas', late, project, 'red')}
-      ${renderFocusCard('Para hoy', today, project, 'orange')}
-      ${renderFocusCard('Mis pendientes', mine, project, 'blue')}
-      ${renderFocusCard('Alta prioridad', high, project, 'green')}
+    <section class="workspace-hero">
+      <div>
+        <span class="section-kicker">Panel de control</span>
+        <h1>${escapeHTML(project.name)}</h1>
+        <p>${escapeHTML(project.description || 'Organiza tareas, equipo, reuniones y entregas desde un solo espacio.')}</p>
+      </div>
+      <div class="workspace-score">
+        <strong>${completion}%</strong>
+        <span>avance total</span>
+        <div class="mini-bar"><span style="width:${completion}%"></span></div>
+      </div>
     </section>
-    <section class="mini-section mt-panel">
-      <div class="section-banner">PROXIMAS REUNIONES</div>
-      <div class="mini-content compact-list">
-        ${meetings.length ? meetings.map(m => renderMeeting(m)).join('') : `<div class="empty-col">No hay reuniones proximas</div>`}
+    <section class="stats-row compact-stats">
+      ${renderStat('blue', stats.minePending, 'Mis pendientes', 'ENFOQUE PERSONAL', stats.total ? stats.minePending / Math.max(stats.total,1) * 100 : 8, '•')}
+      ${renderStat('green', stats.done, 'Completadas', 'AVANCE REAL', stats.total ? stats.done / Math.max(stats.total,1) * 100 : 0, '✓')}
+      ${renderStat('red', stats.late, 'Vencidas', 'RIESGO', stats.total ? stats.late / Math.max(stats.total,1) * 100 : 0, '!')}
+    </section>
+    <section class="focus-layout">
+      <div class="focus-stack">
+        ${renderFocusCard('Para resolver ahora', [...late, ...today].slice(0, 6), project, late.length ? 'red' : 'orange')}
+        ${renderFocusCard('Tus tareas activas', mine, project, 'blue')}
+      </div>
+      <div class="agenda-panel">
+        <div class="agenda-head">
+          <div><span class="section-kicker">Agenda</span><h2>Próximos movimientos</h2></div>
+          <button class="secondary" onclick="app.openModal('task')">Nueva tarea</button>
+        </div>
+        <div class="agenda-list">
+          ${nextDeadlines.length ? nextDeadlines.map(t => renderAgendaTask(project, t)).join('') : `<div class="empty-col compact-empty">No hay fechas pendientes</div>`}
+        </div>
+        <div class="agenda-head secondary-head">
+          <div><span class="section-kicker">Reuniones</span><h2>Calendario del equipo</h2></div>
+          <button class="ghost" onclick="app.openModal('meeting')">Nueva reunión</button>
+        </div>
+        <div class="compact-list">
+          ${meetings.length ? meetings.map(m => renderMeeting(m)).join('') : `<div class="empty-col compact-empty">Sin reuniones próximas</div>`}
+        </div>
       </div>
     </section>`;
+}
+
+function renderAgendaTask(project, task) {
+  return `<button class="agenda-task ${isLate(task) ? 'late' : ''}" onclick="app.openModal('taskDetail',{id:'${task.id}'})"><span>${escapeHTML(fmtDate(task.dueDate))}</span><b>${escapeHTML(task.title)}</b><small>${escapeHTML(assigneeLabel(project, task))} | ${escapeHTML(daysText(task.dueDate))}</small></button>`;
 }
 
 function renderFocusCard(title, tasks, project, tone) {
@@ -1884,9 +1887,11 @@ function renderStats(project, me) {
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
     .slice(0, 8);
   const avg = members.length ? ((project.tasks || []).filter(t => t.status === 'done').length / Math.max(1, project.tasks.length) * 10).toFixed(1) : '0.0';
+  const insights = sofiaInsights(project, me).slice(0, 3);
   return `
     <div class="content-head">
-      <div class="content-title"><h1>Estadísticas</h1><p>Ranking, fechas límite y avance general.</p></div>
+      <div class="content-title"><h1>Reportes</h1><p>Avance, riesgos y resumen semanal del proyecto.</p></div>
+      <div class="action-row"><button class="secondary" onclick="app.copyWeeklySummary()">Copiar resumen</button><button class="primary" onclick="app.exportReportPDF()">Descargar PDF</button></div>
     </div>
     <section class="stats-layout">
       <div>
@@ -1908,6 +1913,15 @@ function renderStats(project, me) {
           <div class="metric-card"><div class="metric-icon">♛</div><div><strong>${escapeHTML(members[0]?.profile.name?.split(' ')[0] || '—')}</strong><span>Líder actual</span></div></div>
         </div>
       </div>
+    </section>
+    <section class="suggestion-grid report-insights">
+      ${insights.length ? insights.map(item => `
+        <article class="suggestion-card ${item.tone}">
+          <span>Lectura del proyecto</span>
+          <h3>${escapeHTML(item.title)}</h3>
+          <p>${escapeHTML(item.text)}</p>
+        </article>`).join('') : `
+        <article class="suggestion-card green"><span>Lectura del proyecto</span><h3>Sin alertas</h3><p>Agrega tareas con responsable y fecha para obtener mejores reportes.</p></article>`}
     </section>`;
 }
 
@@ -2134,13 +2148,6 @@ function modalShell(title, body, subtitle = '') {
 }
 
 function bindWorkspaceForms(project, me) {
-  const agentForm = document.getElementById('sofiaAgentForm');
-  if (agentForm) agentForm.addEventListener('submit', e => {
-    e.preventDefault();
-    const data = Object.fromEntries(new FormData(agentForm));
-    agentForm.reset();
-    app.askSofia(data.query);
-  });
   const profileForm = document.getElementById('profileForm');
   if (profileForm) profileForm.addEventListener('submit', async e => {
     e.preventDefault();
