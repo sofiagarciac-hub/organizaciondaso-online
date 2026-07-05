@@ -1250,6 +1250,97 @@ a { color: var(--blue); }
 .agenda-task.late { border-left: 4px solid var(--red); }
 .report-insights { margin-top: 18px; }
 
+.sofia-dock {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  width: min(380px, calc(100vw - 36px));
+  background: #fff;
+  border: 1.5px solid #c7d9ff;
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(10,30,70,.2);
+  z-index: 35;
+  overflow: hidden;
+}
+.sofia-dock-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, var(--navy-2), var(--blue));
+  color: #fff;
+}
+.sofia-dock-head strong { display: block; font-size: 13.5px; }
+.sofia-dock-head span { display: block; color: rgba(255,255,255,.68); font-size: 11.5px; margin-top: 2px; }
+.sofia-dock-head button {
+  background: rgba(255,255,255,.16);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-weight: 800;
+  font-size: 11.5px;
+}
+.sofia-dock-messages {
+  max-height: 190px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: #f8fbff;
+}
+.sofia-msg {
+  width: fit-content;
+  max-width: 92%;
+  background: #fff;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: #40536d;
+  line-height: 1.45;
+  font-size: 12.5px;
+  white-space: pre-line;
+}
+.sofia-msg.me {
+  justify-self: end;
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+.sofia-dock-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 10px;
+  background: #f8fbff;
+}
+.sofia-dock-actions button {
+  flex: 1;
+  background: #eef4ff;
+  border: 1.5px solid #d4e2ff;
+  color: var(--blue-2);
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 11.5px;
+  font-weight: 900;
+}
+.sofia-dock-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1.5px solid var(--line);
+}
+.sofia-dock-form input { font-size: 12.5px; padding: 9px 10px; }
+.sofia-dock-form button {
+  background: var(--blue);
+  color: #fff;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-weight: 900;
+  font-size: 12px;
+}
+
 /* Free productivity additions */
 .filter-select {
   width: auto;
@@ -1458,7 +1549,9 @@ body.dark-theme .check-item,
 body.dark-theme .top-action-btn,
 body.dark-theme .workspace-hero > div:first-child,
 body.dark-theme .workspace-score,
-body.dark-theme .agenda-panel {
+body.dark-theme .agenda-panel,
+body.dark-theme .sofia-dock,
+body.dark-theme .sofia-msg {
   background: #111827;
   border-color: var(--line);
 }
@@ -1474,7 +1567,9 @@ body.dark-theme .calendar-task,
 body.dark-theme .agenda-task,
 body.dark-theme .compact-item,
 body.dark-theme .task-panel,
-body.dark-theme .calendar-date {
+body.dark-theme .calendar-date,
+body.dark-theme .sofia-dock-messages,
+body.dark-theme .sofia-dock-actions {
   background: #172033;
   border-color: var(--line);
   color: var(--text);
@@ -1496,6 +1591,12 @@ body.dark-theme .stat-bg { background: #172033; }
     grid-template-areas: "date" "title" "meta";
   }
   .top-action-btn { flex: 1; }
+  .sofia-dock {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: auto;
+  }
 }
 
 /* ── Project progress bar ─────────────── */

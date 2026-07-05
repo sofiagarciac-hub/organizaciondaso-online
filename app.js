@@ -950,9 +950,31 @@ function addReportLine(pages, cursor, text = '', opts = {}) {
   cursor.y -= lineHeight;
 }
 
-function addReportSection(pages, cursor, title) {
-  cursor.y -= 8;
-  addReportLine(pages, cursor, title.toUpperCase(), { size: 14, bold: true, lineHeight: 20 });
+function addReportSpace(cursor, amount = 10) {
+  cursor.y -= amount;
+}
+
+function addReportRule(pages, cursor, yOffset = 2) {
+  if (!pages.length) pages.push([]);
+  pages[pages.length - 1].push({
+    type: 'line',
+    x1: 50,
+    y1: cursor.y - yOffset,
+    x2: 545,
+    y2: cursor.y - yOffset,
+  });
+  cursor.y -= 12;
+}
+
+function addReportSection(pages, cursor, title, number = '') {
+  addReportSpace(cursor, 10);
+  const label = number ? `${number}. ${title}` : title;
+  addReportLine(pages, cursor, label.toUpperCase(), { size: 13, bold: true, lineHeight: 16 });
+  addReportRule(pages, cursor, 1);
+}
+
+function addReportMetricLine(pages, cursor, label, value) {
+  addReportLine(pages, cursor, `${label}: ${value}`, { size: 10.5, lineHeight: 15 });
 }
 
 function addWrappedReport(pages, cursor, text, opts = {}) {
@@ -972,36 +994,39 @@ function buildReportPDF(project, me) {
   const insights = sofiaInsights(project, me);
   const today = new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
 
-  addReportLine(pages, cursor, 'Organizaciondaso - Reporte semanal del proyecto', { size: 18, bold: true, lineHeight: 24 });
+  addReportLine(pages, cursor, 'ORGANIZACIONDASO', { size: 11, bold: true, lineHeight: 16 });
+  addReportLine(pages, cursor, 'Reporte semanal del proyecto', { size: 22, bold: true, lineHeight: 28 });
   addReportLine(pages, cursor, project.name, { size: 16, bold: true, lineHeight: 20 });
-  addWrappedReport(pages, cursor, project.description || 'Sin descripcion del proyecto.', { maxChars: 96, lineHeight: 14 });
-  addReportLine(pages, cursor, `Semana: ${summary.range} | Generado por: ${me.name} | Fecha: ${today}`, { size: 10, lineHeight: 18 });
+  addWrappedReport(pages, cursor, project.description || 'Sin descripcion del proyecto.', { maxChars: 90, lineHeight: 14 });
+  addReportSpace(cursor, 4);
+  addReportLine(pages, cursor, `Semana: ${summary.range}`, { size: 10.5, bold: true, lineHeight: 15 });
+  addReportLine(pages, cursor, `Generado por: ${me.name} | Fecha: ${today}`, { size: 10, lineHeight: 16 });
+  addReportRule(pages, cursor, 2);
 
-  addReportSection(pages, cursor, 'Resumen ejecutivo');
-  addReportLine(pages, cursor, `Integrantes: ${(project.members || []).length}`);
-  addReportLine(pages, cursor, `Tareas totales: ${tasks.length}`);
-  addReportLine(pages, cursor, `Completadas: ${done.length} | En proceso: ${doing.length} | Pendientes: ${pending.length} | Vencidas: ${late.length}`);
-  addReportLine(pages, cursor, `Creadas esta semana: ${summary.createdWeek.length} | Cerradas esta semana: ${summary.doneWeek.length} | Vencen esta semana: ${summary.dueWeek.length}`);
-  addReportLine(pages, cursor, `Acuerdos registrados: ${(project.agreements || []).length} | Reuniones registradas: ${(project.meetings || []).length}`);
+  addReportSection(pages, cursor, 'Resumen ejecutivo', '1');
+  addReportMetricLine(pages, cursor, 'Equipo', `${(project.members || []).length} integrante(s)`);
+  addReportMetricLine(pages, cursor, 'Tareas', `${tasks.length} total | ${done.length} completadas | ${doing.length} en proceso | ${pending.length} pendientes | ${late.length} vencidas`);
+  addReportMetricLine(pages, cursor, 'Semana', `${summary.createdWeek.length} creadas | ${summary.doneWeek.length} cerradas | ${summary.dueWeek.length} vencen`);
+  addReportMetricLine(pages, cursor, 'Organizacion', `${(project.agreements || []).length} acuerdos | ${(project.meetings || []).length} reuniones`);
 
-  addReportSection(pages, cursor, 'Sofia - sugerencias');
+  addReportSection(pages, cursor, 'Sofia - lectura del proyecto', '2');
   if (!insights.length) addReportLine(pages, cursor, 'Sin alertas fuertes. Mantener fechas y responsables actualizados.');
   insights.forEach((item, index) => addWrappedReport(pages, cursor, `${index + 1}. ${item.title}: ${item.text}`, { maxChars: 100 }));
 
-  addReportSection(pages, cursor, 'Equipo');
+  addReportSection(pages, cursor, 'Equipo', '3');
   (project.members || []).forEach((id, index) => {
     const profile = projectMemberProfile(project, id);
     const progress = memberProgress(project, id);
     addWrappedReport(pages, cursor, `${index + 1}. ${profile.name} - ${profile.role || 'Integrante'} - ${progress.done}/${progress.total} tareas completadas (${progress.percent}%).`, { maxChars: 100 });
   });
 
-  addReportSection(pages, cursor, 'Vencen esta semana');
+  addReportSection(pages, cursor, 'Vencen esta semana', '4');
   if (!summary.dueWeek.length) addReportLine(pages, cursor, 'No hay tareas pendientes con fecha dentro de esta semana.');
   summary.dueWeek.forEach((task, index) => {
     addWrappedReport(pages, cursor, `${index + 1}. ${task.title} | ${statusPDFText(task.status)} | ${assigneeLabel(project, task)} | Vence: ${fmtDate(task.dueDate)} | Prioridad: ${priorityPDFText(task.priority)}`, { maxChars: 100 });
   });
 
-  addReportSection(pages, cursor, 'Tareas completadas');
+  addReportSection(pages, cursor, 'Tareas completadas', '5');
   if (!done.length) addReportLine(pages, cursor, 'No hay tareas completadas.');
   done.forEach((task, index) => {
     addWrappedReport(pages, cursor, `${index + 1}. ${task.title} | Asignado a: ${assigneeLabel(project, task)} | Completado: ${fmtDate(task.completedAt || task.dueDate)} | Prioridad: ${priorityPDFText(task.priority)}${task.tags ? ' | Tags: ' + task.tags : ''}`, { maxChars: 100 });
@@ -1009,7 +1034,7 @@ function buildReportPDF(project, me) {
     if (taskMetaSummary(task)) addWrappedReport(pages, cursor, `   Seguimiento: ${taskMetaSummary(task)}`, { maxChars: 96, x: 62 });
   });
 
-  addReportSection(pages, cursor, 'Tareas pendientes y en proceso');
+  addReportSection(pages, cursor, 'Tareas pendientes y en proceso', '6');
   if (!pending.length) addReportLine(pages, cursor, 'No hay tareas pendientes.');
   pending.forEach((task, index) => {
     addWrappedReport(pages, cursor, `${index + 1}. ${task.title} | Estado: ${statusPDFText(task.status)} | Asignado a: ${assigneeLabel(project, task)} | Vence: ${fmtDate(task.dueDate)} | Prioridad: ${priorityPDFText(task.priority)}${isLate(task) ? ' | VENCIDA' : ''}`, { maxChars: 100 });
@@ -1017,14 +1042,14 @@ function buildReportPDF(project, me) {
     if (taskMetaSummary(task)) addWrappedReport(pages, cursor, `   Seguimiento: ${taskMetaSummary(task)}`, { maxChars: 96, x: 62 });
   });
 
-  addReportSection(pages, cursor, 'Acuerdos');
+  addReportSection(pages, cursor, 'Acuerdos', '7');
   if (!(project.agreements || []).length) addReportLine(pages, cursor, 'No hay acuerdos registrados.');
   (project.agreements || []).forEach((agreement, index) => {
     addWrappedReport(pages, cursor, `${index + 1}. ${agreement.title} | Responsable: ${projectMemberName(project, agreement.responsible)} | Fecha: ${fmtDate(agreement.date)}`, { maxChars: 100 });
     if (agreement.details) addWrappedReport(pages, cursor, `   Detalle: ${agreement.details}`, { maxChars: 96, x: 62 });
   });
 
-  addReportSection(pages, cursor, 'Reuniones');
+  addReportSection(pages, cursor, 'Reuniones', '8');
   if (!(project.meetings || []).length) addReportLine(pages, cursor, 'No hay reuniones registradas.');
   (project.meetings || []).forEach((meeting, index) => {
     addWrappedReport(pages, cursor, `${index + 1}. ${meeting.title} | Fecha: ${fmtDate(meeting.date)} | Participantes: ${meeting.participants || 'Sin participantes'}`, { maxChars: 100 });
@@ -1051,6 +1076,9 @@ function createSimplePDF(pages) {
     contentObjectIds.push(contentId);
     pageObjectIds.push(pageId);
     const stream = lines.map(line => {
+      if (line.type === 'line') {
+        return `q 0.82 0.86 0.92 RG 1 w ${line.x1} ${line.y1} m ${line.x2} ${line.y2} l S Q`;
+      }
       const font = line.bold ? 'F2' : 'F1';
       return `BT /${font} ${line.size} Tf ${line.x} ${line.y} Td (${pdfEscape(line.text)}) Tj ET`;
     }).join('\n');
@@ -1104,7 +1132,7 @@ function render() {
     bindStartFormsWithSync();
     return;
   }
-  appRoot.innerHTML = renderWorkspace(project, me) + renderModal(project, me);
+  appRoot.innerHTML = renderWorkspace(project, me) + renderSofiaDock(project, me) + renderModal(project, me);
   bindWorkspaceFormsWithSync(project, me);
   runReminderCheck();
 }
@@ -1682,6 +1710,31 @@ function renderAgendaTask(project, task) {
   return `<button class="agenda-task ${isLate(task) ? 'late' : ''}" onclick="app.openModal('taskDetail',{id:'${task.id}'})"><span>${escapeHTML(fmtDate(task.dueDate))}</span><b>${escapeHTML(task.title)}</b><small>${escapeHTML(assigneeLabel(project, task))} | ${escapeHTML(daysText(task.dueDate))}</small></button>`;
 }
 
+function renderSofiaDock(project, me) {
+  const messages = state.agentMessages.length ? state.agentMessages : [
+    { from: 'sofia', text: 'Hola, soy Sofia. Te ayudo a revisar pendientes, vencimientos, reuniones y avance del equipo.' }
+  ];
+  return `
+    <aside class="sofia-dock">
+      <div class="sofia-dock-head">
+        <div><strong>Sofia IA</strong><span>Asistente del proyecto</span></div>
+        <button onclick="app.requestNotifications()">Avisos</button>
+      </div>
+      <div class="sofia-dock-messages">
+        ${messages.map(m => `<div class="sofia-msg ${m.from === 'me' ? 'me' : ''}">${escapeHTML(m.text)}</div>`).join('')}
+      </div>
+      <div class="sofia-dock-actions">
+        <button onclick="app.askSofia('que tareas hay pendientes')">Pendientes</button>
+        <button onclick="app.askSofia('que vence pronto')">Vence pronto</button>
+        <button onclick="app.askSofia('resumen del equipo')">Resumen</button>
+      </div>
+      <form id="sofiaAgentForm" class="sofia-dock-form">
+        <input name="query" placeholder="Preguntale a Sofia..." autocomplete="off">
+        <button type="submit">Enviar</button>
+      </form>
+    </aside>`;
+}
+
 function renderFocusCard(title, tasks, project, tone) {
   return `
     <article class="focus-card ${tone}">
@@ -2148,6 +2201,13 @@ function modalShell(title, body, subtitle = '') {
 }
 
 function bindWorkspaceForms(project, me) {
+  const agentForm = document.getElementById('sofiaAgentForm');
+  if (agentForm) agentForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(agentForm));
+    agentForm.reset();
+    app.askSofia(data.query);
+  });
   const profileForm = document.getElementById('profileForm');
   if (profileForm) profileForm.addEventListener('submit', async e => {
     e.preventDefault();
