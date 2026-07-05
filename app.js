@@ -10,6 +10,9 @@ const state = {
   startMode: 'create',
   mainTab: 'tickets',
   ticketFilter: 'mine',
+  priorityFilter: 'all',
+  dueFilter: 'all',
+  theme: localStorage.getItem('hanter_theme_v5') || 'light',
   selectedProjectId: localStorage.getItem('hanter_selected_project_v5') || '',
   modal: null,
   notice: '',
@@ -197,6 +200,42 @@ function touchProject(project) {
   project.updatedAt = new Date().toISOString();
 }
 
+function applyTheme() {
+  document.body.classList.toggle('dark-theme', state.theme === 'dark');
+}
+
+function canManageProject(project, userId) {
+  if (!project || !userId) return false;
+  return project.createdBy ? project.createdBy === userId : project.members?.[0] === userId;
+}
+
+function canManageTask(project, task, userId) {
+  return task?.createdBy === userId || canManageProject(project, userId);
+}
+
+function checklistProgress(task) {
+  const checklist = task.checklist || [];
+  const done = checklist.filter(item => item.done).length;
+  return { total: checklist.length, done };
+}
+
+function taskMetaSummary(task) {
+  const progress = checklistProgress(task);
+  const comments = (task.comments || []).length;
+  const parts = [];
+  if (progress.total) parts.push(`${progress.done}/${progress.total} subtareas`);
+  if (comments) parts.push(`${comments} comentario${comments === 1 ? '' : 's'}`);
+  return parts.join(' | ');
+}
+
+function isTodayISO(value) {
+  return value === todayISO();
+}
+
+function isThisWeekISO(value) {
+  return inCurrentWeek(value);
+}
+
 function encodePayload(obj) {
   const json = JSON.stringify(obj);
   const encoded = btoa(unescape(encodeURIComponent(json)));
@@ -308,6 +347,13 @@ const api = {
   setStartMode(mode) { state.startMode = mode; render(); },
   setTab(tab) { state.mainTab = tab; render(); },
   setFilter(filter) { state.ticketFilter = filter; state.search = ''; render(); },
+  setPriorityFilter(filter) { state.priorityFilter = filter; render(); },
+  setDueFilter(filter) { state.dueFilter = filter; render(); },
+  toggleTheme() {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('hanter_theme_v5', state.theme);
+    render();
+  },
   openModal: setModal,
   openProfileEditor() { setModal('profile'); },
   closeModal,
@@ -394,6 +440,7 @@ const api = {
   deleteProject(id) {
     const p = state.db.projects[id];
     if (!p) return;
+    if (!canManageProject(p, state.db.currentUserId)) return showNotice('Solo quien creo el proyecto puede eliminarlo.');
     if (!confirm(`¿Eliminar el proyecto “${p.name}” de este navegador?`)) return;
     delete state.db.projects[id];
     if (state.selectedProjectId === id) state.selectedProjectId = '';
@@ -413,15 +460,73 @@ const api = {
   deleteTask(taskId) {
     const p = currentProject();
     if (!p) return;
+    const task = p.tasks.find(t => t.id === taskId);
+    if (!canManageTask(p, task, state.db.currentUserId)) return showNotice('Solo quien creo la tarea o el proyecto puede eliminarla.');
     p.tasks = p.tasks.filter(t => t.id !== taskId);
     touchProject(p);
     saveDB();
     closeModal();
   },
   setSearch(q) { state.search = q; render(); },
+  addSubtask(taskId, title) {
+    const p = currentProject();
+    const task = p?.tasks.find(t => t.id === taskId);
+    const cleanTitle = (title || '').trim();
+    if (!task || !cleanTitle) return;
+    task.checklist = task.checklist || [];
+    task.checklist.push({ id: uid('sub'), title: cleanTitle, done: false, createdAt: new Date().toISOString() });
+    touchProject(p);
+    saveDB();
+    render();
+  },
+  toggleSubtask(taskId, subtaskId) {
+    const p = currentProject();
+    const task = p?.tasks.find(t => t.id === taskId);
+    const item = task?.checklist?.find(x => x.id === subtaskId);
+    if (!item) return;
+    item.done = !item.done;
+    item.completedAt = item.done ? new Date().toISOString() : '';
+    touchProject(p);
+    saveDB();
+    render();
+  },
+  deleteSubtask(taskId, subtaskId) {
+    const p = currentProject();
+    const task = p?.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    task.checklist = (task.checklist || []).filter(x => x.id !== subtaskId);
+    touchProject(p);
+    saveDB();
+    render();
+  },
+  addComment(taskId, text) {
+    const p = currentProject();
+    const me = currentUser();
+    const task = p?.tasks.find(t => t.id === taskId);
+    const cleanText = (text || '').trim();
+    if (!task || !me || !cleanText) return;
+    task.comments = task.comments || [];
+    task.comments.push({ id: uid('comment'), text: cleanText, authorId: me.id, createdAt: new Date().toISOString() });
+    touchProject(p);
+    saveDB();
+    render();
+  },
+  deleteComment(taskId, commentId) {
+    const p = currentProject();
+    const me = currentUser();
+    const task = p?.tasks.find(t => t.id === taskId);
+    const comment = task?.comments?.find(x => x.id === commentId);
+    if (!task || !comment || !me) return;
+    if (comment.authorId !== me.id && !canManageTask(p, task, me.id)) return showNotice('Solo puedes borrar tus comentarios o los de tus tareas.');
+    task.comments = (task.comments || []).filter(x => x.id !== commentId);
+    touchProject(p);
+    saveDB();
+    render();
+  },
   clearDoneTasks() {
     const p = currentProject();
     if (!p) return;
+    if (!canManageProject(p, state.db.currentUserId)) return showNotice('Solo quien creo el proyecto puede limpiar completadas.');
     const count = p.tasks.filter(t => t.status === 'done').length;
     if (!count) return showNotice('No hay tareas completadas para eliminar.');
     if (!confirm(`¿Eliminar las ${count} tareas completadas?`)) return;
@@ -901,6 +1006,7 @@ function buildReportPDF(project, me) {
   done.forEach((task, index) => {
     addWrappedReport(pages, cursor, `${index + 1}. ${task.title} | Asignado a: ${assigneeLabel(project, task)} | Completado: ${fmtDate(task.completedAt || task.dueDate)} | Prioridad: ${priorityPDFText(task.priority)}${task.tags ? ' | Tags: ' + task.tags : ''}`, { maxChars: 100 });
     if (task.description) addWrappedReport(pages, cursor, `   Detalle: ${task.description}`, { maxChars: 96, x: 62 });
+    if (taskMetaSummary(task)) addWrappedReport(pages, cursor, `   Seguimiento: ${taskMetaSummary(task)}`, { maxChars: 96, x: 62 });
   });
 
   addReportSection(pages, cursor, 'Tareas pendientes y en proceso');
@@ -908,6 +1014,7 @@ function buildReportPDF(project, me) {
   pending.forEach((task, index) => {
     addWrappedReport(pages, cursor, `${index + 1}. ${task.title} | Estado: ${statusPDFText(task.status)} | Asignado a: ${assigneeLabel(project, task)} | Vence: ${fmtDate(task.dueDate)} | Prioridad: ${priorityPDFText(task.priority)}${isLate(task) ? ' | VENCIDA' : ''}`, { maxChars: 100 });
     if (task.description) addWrappedReport(pages, cursor, `   Detalle: ${task.description}`, { maxChars: 96, x: 62 });
+    if (taskMetaSummary(task)) addWrappedReport(pages, cursor, `   Seguimiento: ${taskMetaSummary(task)}`, { maxChars: 96, x: 62 });
   });
 
   addReportSection(pages, cursor, 'Acuerdos');
@@ -977,6 +1084,7 @@ function bootstrapInvite() {
 bootstrapInvite();
 
 function render() {
+  applyTheme();
   const me = currentUser();
   if (!me) {
     if (state.pendingInvite) state.entryView = 'auth';
@@ -1385,7 +1493,9 @@ function renderWorkspace(project, me) {
           ${renderBrand()}
           <div class="brand-divider"></div>
           <nav class="main-tabs">
+            ${tabBtn('today', 'Hoy')}
             ${tabBtn('tickets', 'Tickets')}
+            ${tabBtn('calendar', 'Calendario')}
             ${tabBtn('team', 'Equipo')}
             ${tabBtn('sofia', 'Sofía')}
             ${tabBtn('stats', 'Estadísticas')}
@@ -1397,6 +1507,7 @@ function renderWorkspace(project, me) {
           <button class="icon-only" title="Código largo" onclick="app.copyLongCode()">⌁</button>
           <button class="icon-only" title="Exportar respaldo" onclick="app.exportProject()">⬇</button>
           <button class="icon-only" title="Descargar reporte PDF" onclick="app.exportReportPDF()">📄</button>
+          <button class="icon-only" title="Cambiar tema" onclick="app.toggleTheme()">${state.theme === 'dark' ? '☀' : '◐'}</button>
           <span class="education-pill">${escapeHTML(project.name)}</span>
           <button class="icon-only" title="Salir" onclick="app.logout()">↪</button>
         </div>
@@ -1446,6 +1557,8 @@ function sideBtnBadge(filter, icon, label, count) {
 }
 
 function renderCurrentTab(project, me) {
+  if (state.mainTab === 'today') return renderToday(project, me);
+  if (state.mainTab === 'calendar') return renderCalendar(project, me);
   if (state.mainTab === 'team') return renderTeam(project, me);
   if (state.mainTab === 'sofia') return renderSofia(project, me);
   if (state.mainTab === 'stats') return renderStats(project, me);
@@ -1540,18 +1653,93 @@ function renderAgentDock(project, me) {
     </aside>`;
 }
 
+function renderToday(project, me) {
+  const tasks = project.tasks || [];
+  const late = tasks.filter(isLate).sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+  const today = tasks.filter(t => t.status !== 'done' && isTodayISO(t.dueDate));
+  const mine = tasks.filter(t => taskHasAssignee(t, me.id) && t.status !== 'done').slice(0, 6);
+  const high = tasks.filter(t => t.status !== 'done' && t.priority === 'high').slice(0, 6);
+  const meetings = [...(project.meetings || [])].filter(m => m.date && m.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4);
+  return `
+    <div class="content-head">
+      <div class="content-title"><h1>Hoy</h1><p>Lo urgente, lo tuyo y las proximas reuniones del proyecto.</p></div>
+      <div class="action-row"><button class="primary" onclick="app.openModal('task')">+ Nueva tarea</button><button class="secondary" onclick="app.openModal('meeting')">+ Reunion</button></div>
+    </div>
+    <section class="today-grid">
+      ${renderFocusCard('Vencidas', late, project, 'red')}
+      ${renderFocusCard('Para hoy', today, project, 'orange')}
+      ${renderFocusCard('Mis pendientes', mine, project, 'blue')}
+      ${renderFocusCard('Alta prioridad', high, project, 'green')}
+    </section>
+    <section class="mini-section mt-panel">
+      <div class="section-banner">PROXIMAS REUNIONES</div>
+      <div class="mini-content compact-list">
+        ${meetings.length ? meetings.map(m => renderMeeting(m)).join('') : `<div class="empty-col">No hay reuniones proximas</div>`}
+      </div>
+    </section>`;
+}
+
+function renderFocusCard(title, tasks, project, tone) {
+  return `
+    <article class="focus-card ${tone}">
+      <div class="focus-head"><strong>${escapeHTML(title)}</strong><span>${tasks.length}</span></div>
+      <div class="focus-list">
+        ${tasks.length ? tasks.map(t => `
+          <button onclick="app.openModal('taskDetail',{id:'${t.id}'})">
+            <b>${escapeHTML(t.title)}</b>
+            <small>${escapeHTML(assigneeLabel(project, t))} | ${escapeHTML(daysText(t.dueDate))}</small>
+          </button>`).join('') : `<div class="empty-col compact-empty">Sin tareas</div>`}
+      </div>
+    </article>`;
+}
+
+function renderCalendar(project, me) {
+  const groups = {};
+  (project.tasks || [])
+    .filter(t => t.status !== 'done' && t.dueDate)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    .forEach(task => {
+      groups[task.dueDate] = groups[task.dueDate] || [];
+      groups[task.dueDate].push(task);
+    });
+  const days = Object.keys(groups);
+  return `
+    <div class="content-head">
+      <div class="content-title"><h1>Calendario</h1><p>Vista gratis por fechas limite, sin integraciones externas.</p></div>
+      <button class="primary" onclick="app.openModal('task')">+ Nueva tarea</button>
+    </div>
+    <section class="calendar-list">
+      ${days.length ? days.map(day => `
+        <article class="calendar-day ${day === todayISO() ? 'today' : ''}">
+          <div class="calendar-date"><strong>${escapeHTML(fmtDate(day))}</strong><span>${groups[day].length} pendiente${groups[day].length === 1 ? '' : 's'}</span></div>
+          <div class="calendar-tasks">${groups[day].map(task => renderCalendarTask(project, task)).join('')}</div>
+        </article>`).join('') : `<div class="empty-col">No hay tareas con fecha limite</div>`}
+    </section>`;
+}
+
+function renderCalendarTask(project, task) {
+  return `<button class="calendar-task ${task.priority || 'medium'}" onclick="app.openModal('taskDetail',{id:'${task.id}'})"><b>${escapeHTML(task.title)}</b><span>${escapeHTML(assigneeLabel(project, task))} | ${escapeHTML(daysText(task.dueDate))}</span></button>`;
+}
+
 function filteredTasks(project, me) {
   let tasks = project.tasks || [];
   if (state.ticketFilter === 'mine') tasks = tasks.filter(t => taskHasAssignee(t, me.id) && t.status !== 'done');
   else if (state.ticketFilter === 'created') tasks = tasks.filter(t => t.createdBy === me.id);
   else if (state.ticketFilter === 'done') tasks = tasks.filter(t => t.status === 'done');
+  if (state.priorityFilter !== 'all') tasks = tasks.filter(t => (t.priority || 'medium') === state.priorityFilter);
+  if (state.dueFilter === 'late') tasks = tasks.filter(isLate);
+  else if (state.dueFilter === 'today') tasks = tasks.filter(t => isTodayISO(t.dueDate));
+  else if (state.dueFilter === 'week') tasks = tasks.filter(t => t.status !== 'done' && isThisWeekISO(t.dueDate));
+  else if (state.dueFilter === 'no-date') tasks = tasks.filter(t => !t.dueDate);
   if (state.search.trim()) {
     const q = state.search.toLowerCase();
     tasks = tasks.filter(t =>
       t.title?.toLowerCase().includes(q) ||
       t.description?.toLowerCase().includes(q) ||
       t.tags?.toLowerCase().includes(q) ||
-      assigneeLabel(project, t).toLowerCase().includes(q)
+      assigneeLabel(project, t).toLowerCase().includes(q) ||
+      (t.comments || []).some(c => c.text?.toLowerCase().includes(q)) ||
+      (t.checklist || []).some(item => item.title?.toLowerCase().includes(q))
     );
   }
   return tasks;
@@ -1568,6 +1756,19 @@ function renderTickets(project, me) {
       <div class="content-title"><h1>${escapeHTML(project.name)}</h1><p>${escapeHTML(project.description || 'Organizaciondaso: espacio de organización grupal')}</p></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input class="search-input" type="search" placeholder="Buscar tarea..." value="${escapeHTML(state.search)}" oninput="app.setSearch(this.value)" style="width:190px">
+        <select class="filter-select" onchange="app.setPriorityFilter(this.value)">
+          <option value="all" ${state.priorityFilter === 'all' ? 'selected' : ''}>Toda prioridad</option>
+          <option value="high" ${state.priorityFilter === 'high' ? 'selected' : ''}>Alta</option>
+          <option value="medium" ${state.priorityFilter === 'medium' ? 'selected' : ''}>Media</option>
+          <option value="low" ${state.priorityFilter === 'low' ? 'selected' : ''}>Baja</option>
+        </select>
+        <select class="filter-select" onchange="app.setDueFilter(this.value)">
+          <option value="all" ${state.dueFilter === 'all' ? 'selected' : ''}>Todas las fechas</option>
+          <option value="late" ${state.dueFilter === 'late' ? 'selected' : ''}>Vencidas</option>
+          <option value="today" ${state.dueFilter === 'today' ? 'selected' : ''}>Hoy</option>
+          <option value="week" ${state.dueFilter === 'week' ? 'selected' : ''}>Esta semana</option>
+          <option value="no-date" ${state.dueFilter === 'no-date' ? 'selected' : ''}>Sin fecha</option>
+        </select>
         <button class="ghost" onclick="app.clearDoneTasks()" title="Vaciar completadas">🗑 Limpiar</button>
         <button class="primary" onclick="app.openModal('task')">＋ Nueva tarea</button>
       </div>
@@ -1612,6 +1813,8 @@ function renderTaskCard(task) {
   const priority = task.priority || 'medium';
   const priorityText = priority === 'high' ? 'Alta' : priority === 'low' ? 'Baja' : 'Media';
   const late = isLate(task);
+  const progress = checklistProgress(task);
+  const comments = (task.comments || []).length;
   const link = task.link ? `<a class="link-line" href="${escapeHTML(task.link)}" target="_blank"><span>↗</span>${escapeHTML(task.link)}</a>` : '';
   return `
     <article class="ticket-card ${priority}">
@@ -1621,6 +1824,7 @@ function renderTaskCard(task) {
       <p class="ticket-desc">${escapeHTML(task.description || 'Sin descripción')}</p>
       ${link}
       <div class="ticket-meta"><span class="tiny-avatar">${escapeHTML(initials(member))}</span><b>${escapeHTML(member)}</b><span>📅 ${late ? 'Venció: ' : 'Vence: '}${escapeHTML(fmtDate(task.dueDate))}</span></div>
+      ${(progress.total || comments) ? `<div class="task-mini-metrics">${progress.total ? `<span>${progress.done}/${progress.total} subtareas</span>` : ''}${comments ? `<span>${comments} comentarios</span>` : ''}</div>` : ''}
       ${task.tags ? `<div class="tag-row">${task.tags.split(',').map(x => x.trim()).filter(Boolean).slice(0,4).map(x => `<span class="tag-chip">#${escapeHTML(x)}</span>`).join('')}</div>` : ''}
       <div class="ticket-actions">
         ${task.status === 'todo' ? `<button class="secondary" onclick="app.updateTaskStatus('${task.id}','doing')">Iniciar tarea</button>` : ''}
@@ -1789,6 +1993,42 @@ function renderAssigneeChoices(project, selectedIds = []) {
   }).join('')}</div>`;
 }
 
+function renderTaskCollaboration(project, task) {
+  const checklist = task.checklist || [];
+  const comments = task.comments || [];
+  const progress = checklistProgress(task);
+  return `
+    <section class="task-panel">
+      <div class="task-panel-head"><h3>Checklist</h3><span>${progress.done}/${progress.total}</span></div>
+      <div class="checklist-list">
+        ${checklist.length ? checklist.map(item => `
+          <label class="check-item ${item.done ? 'done' : ''}">
+            <input type="checkbox" ${item.done ? 'checked' : ''} onchange="app.toggleSubtask('${task.id}','${item.id}')">
+            <span>${escapeHTML(item.title)}</span>
+            <button type="button" onclick="app.deleteSubtask('${task.id}','${item.id}')">Eliminar</button>
+          </label>`).join('') : `<div class="empty-col compact-empty">Sin subtareas</div>`}
+      </div>
+      <form id="subtaskForm" class="inline-form">
+        <input name="title" placeholder="Agregar subtarea..." autocomplete="off">
+        <button class="secondary" type="submit">Agregar</button>
+      </form>
+    </section>
+    <section class="task-panel">
+      <div class="task-panel-head"><h3>Comentarios</h3><span>${comments.length}</span></div>
+      <div class="comment-list">
+        ${comments.length ? comments.map(comment => {
+          const author = projectMemberName(project, comment.authorId);
+          const canDelete = comment.authorId === state.db.currentUserId || canManageTask(project, task, state.db.currentUserId);
+          return `<article class="comment-item"><div><b>${escapeHTML(author)}</b><small>${escapeHTML(new Date(comment.createdAt || Date.now()).toLocaleDateString('es-PE'))}</small></div><p>${escapeHTML(comment.text)}</p>${canDelete ? `<button onclick="app.deleteComment('${task.id}','${comment.id}')">Eliminar</button>` : ''}</article>`;
+        }).join('') : `<div class="empty-col compact-empty">Sin comentarios</div>`}
+      </div>
+      <form id="taskCommentForm" class="inline-form">
+        <input name="text" placeholder="Escribir comentario..." autocomplete="off">
+        <button class="secondary" type="submit">Comentar</button>
+      </form>
+    </section>`;
+}
+
 function renderModal(project, me) {
   if (!state.modal) return '';
   const { type, data } = state.modal;
@@ -1829,6 +2069,7 @@ function renderModal(project, me) {
     const task = project.tasks.find(t => t.id === data.id);
     if (!task) return '';
     const owner = assigneeLabel(project, task);
+    const canDeleteTask = canManageTask(project, task, me.id);
     return modalShell(task.title, `
       <div class="detail-box">${escapeHTML(task.description || 'Sin descripción')}</div>
       ${task.link ? `<p><a class="link-line" href="${escapeHTML(task.link)}" target="_blank">↗ ${escapeHTML(task.link)}</a></p>` : ''}
@@ -1842,8 +2083,9 @@ function renderModal(project, me) {
         <button class="secondary" onclick="app.updateTaskStatus('${task.id}','doing'); app.closeModal()">En proceso</button>
         <button class="success" onclick="app.updateTaskStatus('${task.id}','done'); app.closeModal()">Completado</button>
         <button class="ghost" onclick="app.editTask('${task.id}')">✏ Editar</button>
-        <button class="danger" onclick="app.deleteTask('${task.id}')">Eliminar</button>
-      </div>`);
+        ${canDeleteTask ? `<button class="danger" onclick="app.deleteTask('${task.id}')">Eliminar</button>` : ''}
+      </div>
+      ${renderTaskCollaboration(project, task)}`);
   }
   if (type === 'agreement') return modalShell('Nuevo acuerdo', `
     <form id="agreementForm" class="form">
@@ -1920,6 +2162,18 @@ function bindWorkspaceForms(project, me) {
     const assignedToMany = formData.getAll('assignedTo').filter(Boolean);
     app.saveEditTask(state.editingTaskId || state.modal?.data?.id, data, assignedToMany);
   });
+  const subtaskForm = document.getElementById('subtaskForm');
+  if (subtaskForm) subtaskForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(subtaskForm));
+    app.addSubtask(state.modal?.data?.id, data.title);
+  });
+  const taskCommentForm = document.getElementById('taskCommentForm');
+  if (taskCommentForm) taskCommentForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(taskCommentForm));
+    app.addComment(state.modal?.data?.id, data.text);
+  });
   const taskForm = document.getElementById('taskForm');
   if (taskForm) taskForm.addEventListener('submit', e => {
     e.preventDefault();
@@ -1938,6 +2192,8 @@ function bindWorkspaceForms(project, me) {
       status: data.status,
       tags: (data.tags || '').trim(),
       link: data.link.trim(),
+      checklist: [],
+      comments: [],
       createdBy: me.id,
       createdAt: new Date().toISOString(),
       completedAt: data.status === 'done' ? todayISO() : ''
