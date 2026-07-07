@@ -416,6 +416,39 @@ const api = {
     if (!p || !me) return;
     copyText(weeklyText(p, me));
   },
+  async sendEmailReminders() {
+    const p = currentProject();
+    if (!p) return;
+    const recipients = projectEmailRecipients(p);
+    const items = reminderItems(p, true);
+    if (!recipients.length) return showNotice('Agrega emails al perfil del equipo para enviar correos.');
+    if (!items.length) return showNotice('No hay tareas o reuniones cercanas para enviar.');
+    showNotice('Enviando correos...');
+    try {
+      const response = await fetch('/api/email-reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectName: p.name, recipients, items }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'No se pudieron enviar los correos.');
+      showNotice(`Correos enviados: ${data.sent}/${data.total}.`);
+    } catch (err) {
+      showNotice(err.message || 'No se pudieron enviar los correos.');
+    }
+  },
+  addTaskToCalendar(taskId) {
+    const p = currentProject();
+    const task = p?.tasks.find(t => t.id === taskId);
+    if (!p || !task) return;
+    window.open(calendarTaskUrl(p, task), '_blank', 'noopener');
+  },
+  addMeetingToCalendar(meetingId) {
+    const p = currentProject();
+    const meeting = p?.meetings.find(m => m.id === meetingId);
+    if (!p || !meeting) return;
+    window.open(calendarMeetingUrl(p, meeting), '_blank', 'noopener');
+  },
   askSofia(text) {
     const p = currentProject();
     const me = currentUser();
@@ -691,6 +724,69 @@ function projectMemberProfile(project, id) {
   };
 }
 
+function projectEmailRecipients(project) {
+  const seen = new Set();
+  return (project.members || [])
+    .map(id => {
+      const profile = projectMemberProfile(project, id);
+      return { name: profile.name || 'Integrante', email: (profile.email || '').trim() };
+    })
+    .filter(item => {
+      const key = item.email.toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item.email) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function calendarDate(value) {
+  return String(value || todayISO()).replaceAll('-', '');
+}
+
+function nextCalendarDate(value) {
+  const date = new Date((value || todayISO()) + 'T12:00:00');
+  date.setDate(date.getDate() + 1);
+  return date.toISOString().slice(0, 10).replaceAll('-', '');
+}
+
+function googleCalendarUrl({ title, details, date }) {
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: title || 'Organizaciondaso',
+    details: details || '',
+    dates: `${calendarDate(date)}/${nextCalendarDate(date)}`,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function calendarTaskUrl(project, task) {
+  return googleCalendarUrl({
+    title: `Tarea: ${task.title}`,
+    date: task.dueDate || todayISO(),
+    details: [
+      `Proyecto: ${project.name}`,
+      `Responsable(s): ${assigneeLabel(project, task)}`,
+      `Estado: ${statusPDFText(task.status)}`,
+      `Prioridad: ${priorityPDFText(task.priority)}`,
+      task.description ? `Detalle: ${task.description}` : '',
+      task.link ? `Link: ${task.link}` : '',
+    ].filter(Boolean).join('\n'),
+  });
+}
+
+function calendarMeetingUrl(project, meeting) {
+  return googleCalendarUrl({
+    title: `Reunion: ${meeting.title}`,
+    date: meeting.date || todayISO(),
+    details: [
+      `Proyecto: ${project.name}`,
+      meeting.participants ? `Participantes: ${meeting.participants}` : '',
+      meeting.agenda ? `Agenda: ${meeting.agenda}` : '',
+      meeting.minutes ? `Acta: ${meeting.minutes}` : '',
+    ].filter(Boolean).join('\n'),
+  });
+}
+
 function avatarMarkup(profile = {}, className = 'tiny-avatar') {
   const name = profile.name || 'Integrante';
   if (profile.avatarUrl) {
@@ -873,34 +969,39 @@ function sofiaAgentReply(project, me, query) {
   if (q.includes('notifica') || q.includes('avis')) {
     return { text: 'Puedes activar notificaciones con el boton "Activar avisos". Te avisare cuando una tarea o reunion este para hoy, manana o ya vencida.' };
   }
+  if (q.includes('correo') || q.includes('email') || q.includes('mail')) {
+    return { text: 'Usa el boton "Correo" de la barra superior para enviar recordatorios al equipo. Si falta RESEND_API_KEY en Render, te avisare para configurarlo.' };
+  }
 
   const insight = sofiaInsights(project, me)[0];
   return { text: insight ? `${insight.title}: ${insight.text}` : 'Puedo responder sobre tareas, vencimientos, reuniones, responsables, avance del equipo y ayudarte a agendar.' };
 }
 
-function reminderItems(project) {
+function reminderItems(project, includeWeek = false) {
   const now = new Date();
   const items = [];
   (project.tasks || []).forEach(task => {
     if (task.status === 'done' || !task.dueDate) return;
     const due = new Date(task.dueDate + 'T23:59:59');
     const days = Math.ceil((due - now) / 86400000);
-    if (days < -1 || days > 1) return;
+    if (days < -1 || days > (includeWeek ? 7 : 1)) return;
     items.push({
       id: `task-${task.id}-${task.dueDate}`,
-      title: days < 0 ? 'Tarea vencida' : days === 0 ? 'Tarea para hoy' : 'Tarea para manana',
+      title: days < 0 ? 'Tarea vencida' : days === 0 ? 'Tarea para hoy' : days === 1 ? 'Tarea para manana' : 'Tarea de esta semana',
       body: `${task.title} - ${assigneeLabel(project, task)}`,
+      when: fmtDate(task.dueDate),
     });
   });
   (project.meetings || []).forEach(meeting => {
     if (!meeting.date) return;
     const date = new Date(meeting.date + 'T12:00:00');
     const days = Math.ceil((date - now) / 86400000);
-    if (days < 0 || days > 1) return;
+    if (days < 0 || days > (includeWeek ? 7 : 1)) return;
     items.push({
       id: `meeting-${meeting.id}-${meeting.date}`,
-      title: days === 0 ? 'Reunion para hoy' : 'Reunion para manana',
+      title: days === 0 ? 'Reunion para hoy' : days === 1 ? 'Reunion para manana' : 'Reunion de esta semana',
       body: `${meeting.title} - ${fmtDate(meeting.date)}`,
+      when: fmtDate(meeting.date),
     });
   });
   return items;
@@ -1530,6 +1631,7 @@ function renderWorkspace(project, me) {
         </div>
         <div class="top-actions">
           <button class="top-action-btn" onclick="app.copyInvite()">Invitar</button>
+          <button class="top-action-btn" onclick="app.sendEmailReminders()">Correo</button>
           <button class="top-action-btn" onclick="app.exportProject()">Respaldo</button>
           <button class="top-action-btn primary-lite" onclick="app.exportReportPDF()">PDF</button>
           <button class="top-action-btn" onclick="app.toggleTheme()">${state.theme === 'dark' ? 'Claro' : 'Oscuro'}</button>
@@ -1883,6 +1985,7 @@ function renderTaskCard(task) {
       ${(progress.total || comments) ? `<div class="task-mini-metrics">${progress.total ? `<span>${progress.done}/${progress.total} subtareas</span>` : ''}${comments ? `<span>${comments} comentarios</span>` : ''}</div>` : ''}
       ${task.tags ? `<div class="tag-row">${task.tags.split(',').map(x => x.trim()).filter(Boolean).slice(0,4).map(x => `<span class="tag-chip">#${escapeHTML(x)}</span>`).join('')}</div>` : ''}
       <div class="ticket-actions">
+        <button class="ghost" onclick="app.addTaskToCalendar('${task.id}')">Calendar</button>
         ${task.status === 'todo' ? `<button class="secondary" onclick="app.updateTaskStatus('${task.id}','doing')">Iniciar tarea</button>` : ''}
         ${task.status !== 'done' ? `<button class="success" onclick="app.updateTaskStatus('${task.id}','done')">✓ Marcar realizado</button>` : `<span class="badge done">Completado el ${escapeHTML(fmtDate(task.completedAt || todayISO()))}</span>`}
       </div>
@@ -2021,7 +2124,7 @@ function renderAgreement(project, agreement) {
 }
 
 function renderMeeting(meeting) {
-  return `<div class="compact-item"><strong>${escapeHTML(meeting.title)}</strong><span>${escapeHTML(meeting.agenda || '')}</span><div class="ticket-meta mt-2"><b>${escapeHTML(fmtDate(meeting.date))}</b><span>${escapeHTML(meeting.participants || 'Sin participantes')}</span><button class="danger" onclick="app.deleteMeeting('${meeting.id}')">Eliminar</button></div></div>`;
+  return `<div class="compact-item"><strong>${escapeHTML(meeting.title)}</strong><span>${escapeHTML(meeting.agenda || '')}</span><div class="ticket-meta mt-2"><b>${escapeHTML(fmtDate(meeting.date))}</b><span>${escapeHTML(meeting.participants || 'Sin participantes')}</span><button class="secondary compact-action" onclick="app.addMeetingToCalendar('${meeting.id}')">Google Calendar</button><button class="danger" onclick="app.deleteMeeting('${meeting.id}')">Eliminar</button></div></div>`;
 }
 
 function optionsMembers(project, selected = '') {
@@ -2149,6 +2252,7 @@ function renderModal(project, me) {
         <button class="secondary" onclick="app.updateTaskStatus('${task.id}','todo'); app.closeModal()">Por hacer</button>
         <button class="secondary" onclick="app.updateTaskStatus('${task.id}','doing'); app.closeModal()">En proceso</button>
         <button class="success" onclick="app.updateTaskStatus('${task.id}','done'); app.closeModal()">Completado</button>
+        <button class="secondary" onclick="app.addTaskToCalendar('${task.id}')">Google Calendar</button>
         <button class="ghost" onclick="app.editTask('${task.id}')">✏ Editar</button>
         ${canDeleteTask ? `<button class="danger" onclick="app.deleteTask('${task.id}')">Eliminar</button>` : ''}
       </div>
