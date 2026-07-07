@@ -424,18 +424,7 @@ const api = {
     if (!recipients.length) return showNotice('Agrega emails al perfil del equipo para enviar correos.');
     if (!items.length) return showNotice('No hay tareas o reuniones cercanas para enviar.');
     showNotice('Enviando correos...');
-    try {
-      const response = await fetch('/api/email-reminders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectName: p.name, recipients, items }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'No se pudieron enviar los correos.');
-      showNotice(`Correos enviados: ${data.sent}/${data.total}.`);
-    } catch (err) {
-      showNotice(err.message || 'No se pudieron enviar los correos.');
-    }
+    sendProjectEmail(p, recipients, items);
   },
   addTaskToCalendar(taskId) {
     const p = currentProject();
@@ -739,6 +728,55 @@ function projectEmailRecipients(project) {
     });
 }
 
+function projectEmailRecipientsByIds(project, ids = []) {
+  const allowed = new Set(ids.filter(Boolean));
+  const base = projectEmailRecipients(project);
+  if (!allowed.size) return base;
+  return base.filter(item => {
+    const memberId = (project.members || []).find(id => {
+      const profile = projectMemberProfile(project, id);
+      return (profile.email || '').trim().toLowerCase() === item.email.toLowerCase();
+    });
+    return allowed.has(memberId);
+  });
+}
+
+async function sendProjectEmail(project, recipients, items, quiet = false) {
+  if (!project || !recipients.length || !items.length) return false;
+  try {
+    const response = await fetch('/api/email-reminders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectName: project.name, recipients, items }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || 'No se pudo enviar el correo.');
+    if (!quiet) showNotice(`Correo enviado: ${data.sent}/${data.total}.`);
+    return true;
+  } catch (err) {
+    if (!quiet) showNotice(err.message || 'No se pudo enviar el correo.');
+    return false;
+  }
+}
+
+function taskEmailItem(project, task, kind = 'Nueva tarea') {
+  return {
+    title: kind,
+    body: `${task.title} - ${assigneeLabel(project, task)}`,
+    when: task.dueDate ? `Vence: ${fmtDate(task.dueDate)}` : '',
+    calendarUrl: calendarTaskUrl(project, task),
+  };
+}
+
+function meetingEmailItem(project, meeting, kind = 'Nueva reunion') {
+  return {
+    title: kind,
+    body: `${meeting.title} - ${meeting.participants || 'Equipo'}`,
+    when: meeting.date ? `Fecha: ${fmtDate(meeting.date)}` : '',
+    calendarUrl: calendarMeetingUrl(project, meeting),
+  };
+}
+
 function calendarDate(value) {
   return String(value || todayISO()).replaceAll('-', '');
 }
@@ -990,6 +1028,7 @@ function reminderItems(project, includeWeek = false) {
       title: days < 0 ? 'Tarea vencida' : days === 0 ? 'Tarea para hoy' : days === 1 ? 'Tarea para manana' : 'Tarea de esta semana',
       body: `${task.title} - ${assigneeLabel(project, task)}`,
       when: fmtDate(task.dueDate),
+      calendarUrl: calendarTaskUrl(project, task),
     });
   });
   (project.meetings || []).forEach(meeting => {
@@ -1002,6 +1041,7 @@ function reminderItems(project, includeWeek = false) {
       title: days === 0 ? 'Reunion para hoy' : days === 1 ? 'Reunion para manana' : 'Reunion de esta semana',
       body: `${meeting.title} - ${fmtDate(meeting.date)}`,
       when: fmtDate(meeting.date),
+      calendarUrl: calendarMeetingUrl(project, meeting),
     });
   });
   return items;
@@ -2352,7 +2392,7 @@ function bindWorkspaceForms(project, me) {
     const data = Object.fromEntries(formData);
     const assignedToMany = formData.getAll('assignedTo').filter(Boolean);
     if (!assignedToMany.length) assignedToMany.push(me.id);
-    project.tasks.push({
+    const task = {
       id: uid('task'),
       title: data.title.trim(),
       description: data.description.trim(),
@@ -2368,10 +2408,18 @@ function bindWorkspaceForms(project, me) {
       createdBy: me.id,
       createdAt: new Date().toISOString(),
       completedAt: data.status === 'done' ? todayISO() : ''
-    });
+    };
+    project.tasks.push(task);
     touchProject(project);
     saveDB();
     closeModal();
+    const recipients = projectEmailRecipientsByIds(project, assignedToMany);
+    if (recipients.length) {
+      sendProjectEmail(project, recipients, [taskEmailItem(project, task)], true)
+        .then(sent => showNotice(sent ? 'Tarea guardada y correo enviado.' : 'Tarea guardada. Falta configurar correo.'));
+    } else {
+      showNotice('Tarea guardada. Agrega emails para avisar automaticamente.');
+    }
   });
   const agreementForm = document.getElementById('agreementForm');
   if (agreementForm) agreementForm.addEventListener('submit', e => {
@@ -2386,10 +2434,18 @@ function bindWorkspaceForms(project, me) {
   if (meetingForm) meetingForm.addEventListener('submit', e => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(meetingForm));
-    project.meetings.push({ id: uid('meeting'), title: data.title.trim(), date: data.date, participants: data.participants.trim(), agenda: data.agenda.trim(), minutes: data.minutes.trim(), createdBy: me.id });
+    const meeting = { id: uid('meeting'), title: data.title.trim(), date: data.date, participants: data.participants.trim(), agenda: data.agenda.trim(), minutes: data.minutes.trim(), createdBy: me.id };
+    project.meetings.push(meeting);
     touchProject(project);
     saveDB();
     closeModal();
+    const recipients = projectEmailRecipients(project);
+    if (recipients.length) {
+      sendProjectEmail(project, recipients, [meetingEmailItem(project, meeting)], true)
+        .then(sent => showNotice(sent ? 'Reunion guardada y correo enviado.' : 'Reunion guardada. Falta configurar correo.'));
+    } else {
+      showNotice('Reunion guardada. Agrega emails para avisar automaticamente.');
+    }
   });
 }
 

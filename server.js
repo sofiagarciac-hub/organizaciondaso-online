@@ -104,6 +104,7 @@ app.post('/api/email-reminders', async (req, res) => {
       title: String(item.title || 'Recordatorio').trim(),
       body: String(item.body || '').trim(),
       when: String(item.when || '').trim(),
+      calendarUrl: String(item.calendarUrl || '').trim(),
     }))
     .filter(item => item.title || item.body)
     .slice(0, 12);
@@ -115,12 +116,13 @@ app.post('/api/email-reminders', async (req, res) => {
     <li style="margin:0 0 10px">
       <strong>${escapeEmailHTML(item.title)}</strong><br>
       <span>${escapeEmailHTML(item.body)}</span>${item.when ? `<br><small>${escapeEmailHTML(item.when)}</small>` : ''}
+      ${item.calendarUrl ? `<br><a href="${escapeEmailHTML(item.calendarUrl)}" style="display:inline-block;margin-top:6px;color:#2756e8;font-weight:700">Agregar a Google Calendar</a>` : ''}
     </li>
   `).join('');
   const text = [
     `Recordatorios de ${projectName}`,
     '',
-    ...cleanItems.map(item => `- ${item.title}: ${item.body}${item.when ? ' (' + item.when + ')' : ''}`),
+    ...cleanItems.map(item => `- ${item.title}: ${item.body}${item.when ? ' (' + item.when + ')' : ''}${item.calendarUrl ? '\n  Calendar: ' + item.calendarUrl : ''}`),
   ].join('\n');
 
   const results = [];
