@@ -764,6 +764,15 @@ function taskEmailItem(project, task, kind = 'Nueva tarea') {
     title: kind,
     body: `${task.title} - ${assigneeLabel(project, task)}`,
     when: task.dueDate ? `Vence: ${fmtDate(task.dueDate)}` : '',
+    dateISO: task.dueDate || todayISO(),
+    eventTitle: `Tarea: ${task.title}`,
+    eventDescription: [
+      `Proyecto: ${project.name}`,
+      `Responsable(s): ${assigneeLabel(project, task)}`,
+      `Estado: ${statusPDFText(task.status)}`,
+      `Prioridad: ${priorityPDFText(task.priority)}`,
+      task.description ? `Detalle: ${task.description}` : '',
+    ].filter(Boolean).join('\n'),
     calendarUrl: calendarTaskUrl(project, task),
   };
 }
@@ -773,6 +782,14 @@ function meetingEmailItem(project, meeting, kind = 'Nueva reunion') {
     title: kind,
     body: `${meeting.title} - ${meeting.participants || 'Equipo'}`,
     when: meeting.date ? `Fecha: ${fmtDate(meeting.date)}` : '',
+    dateISO: meeting.date || todayISO(),
+    eventTitle: `Reunion: ${meeting.title}`,
+    eventDescription: [
+      `Proyecto: ${project.name}`,
+      meeting.participants ? `Participantes: ${meeting.participants}` : '',
+      meeting.agenda ? `Agenda: ${meeting.agenda}` : '',
+      meeting.minutes ? `Acta: ${meeting.minutes}` : '',
+    ].filter(Boolean).join('\n'),
     calendarUrl: calendarMeetingUrl(project, meeting),
   };
 }
@@ -1028,6 +1045,9 @@ function reminderItems(project, includeWeek = false) {
       title: days < 0 ? 'Tarea vencida' : days === 0 ? 'Tarea para hoy' : days === 1 ? 'Tarea para manana' : 'Tarea de esta semana',
       body: `${task.title} - ${assigneeLabel(project, task)}`,
       when: fmtDate(task.dueDate),
+      dateISO: task.dueDate,
+      eventTitle: `Tarea: ${task.title}`,
+      eventDescription: `Proyecto: ${project.name}\nResponsable(s): ${assigneeLabel(project, task)}\nEstado: ${statusPDFText(task.status)}`,
       calendarUrl: calendarTaskUrl(project, task),
     });
   });
@@ -1041,6 +1061,9 @@ function reminderItems(project, includeWeek = false) {
       title: days === 0 ? 'Reunion para hoy' : days === 1 ? 'Reunion para manana' : 'Reunion de esta semana',
       body: `${meeting.title} - ${fmtDate(meeting.date)}`,
       when: fmtDate(meeting.date),
+      dateISO: meeting.date,
+      eventTitle: `Reunion: ${meeting.title}`,
+      eventDescription: `Proyecto: ${project.name}${meeting.participants ? '\nParticipantes: ' + meeting.participants : ''}${meeting.agenda ? '\nAgenda: ' + meeting.agenda : ''}`,
       calendarUrl: calendarMeetingUrl(project, meeting),
     });
   });

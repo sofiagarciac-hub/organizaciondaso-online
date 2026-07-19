@@ -105,6 +105,9 @@ app.post('/api/email-reminders', async (req, res) => {
       body: String(item.body || '').trim(),
       when: String(item.when || '').trim(),
       calendarUrl: String(item.calendarUrl || '').trim(),
+      dateISO: String(item.dateISO || '').trim(),
+      eventTitle: String(item.eventTitle || item.title || 'Recordatorio').trim(),
+      eventDescription: String(item.eventDescription || item.body || '').trim(),
     }))
     .filter(item => item.title || item.body)
     .slice(0, 12);
@@ -124,6 +127,12 @@ app.post('/api/email-reminders', async (req, res) => {
     '',
     ...cleanItems.map(item => `- ${item.title}: ${item.body}${item.when ? ' (' + item.when + ')' : ''}${item.calendarUrl ? '\n  Calendar: ' + item.calendarUrl : ''}`),
   ].join('\n');
+  const attachments = cleanItems
+    .filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.dateISO))
+    .map((item, index) => ({
+      filename: `organizaciondaso-${index + 1}.ics`,
+      content: Buffer.from(createICS(projectName, item), 'utf8').toString('base64'),
+    }));
 
   const results = [];
   for (const recipient of cleanRecipients) {
@@ -145,6 +154,7 @@ app.post('/api/email-reminders', async (req, res) => {
             <ul style="padding-left:20px;margin:0">${listHtml}</ul>
           </div>
         `,
+        ...(attachments.length ? { attachments } : {}),
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -162,6 +172,39 @@ function escapeEmailHTML(text = '') {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function createICS(projectName, item) {
+  const start = item.dateISO.replaceAll('-', '');
+  const endDate = new Date(item.dateISO + 'T12:00:00Z');
+  endDate.setUTCDate(endDate.getUTCDate() + 1);
+  const end = endDate.toISOString().slice(0, 10).replaceAll('-', '');
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const uid = `${start}-${Math.random().toString(36).slice(2)}@organizaciondaso`;
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Organizaciondaso//Workspace//ES',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART;VALUE=DATE:${start}`,
+    `DTEND;VALUE=DATE:${end}`,
+    `SUMMARY:${escapeICS(item.eventTitle || item.title)}`,
+    `DESCRIPTION:${escapeICS(`${item.eventDescription || item.body}\\n\\nProyecto: ${projectName}`)}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+}
+
+function escapeICS(text = '') {
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;');
 }
 
 app.get('*', (req, res) => {
